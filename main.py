@@ -54,13 +54,9 @@ class MusicBot(commands.Bot):
         )
 
     async def setup_hook(self) -> None:
-        """Inicialización asíncrona previa al login: Cargar cogs y sincronizar Slash Commands."""
+        """Inicialización asíncrona previa al login: Cargar cogs e iniciar servidor de salud."""
         logger.info("Cargando módulos y cogs...")
         await self.load_extension("cogs.music")
-        
-        logger.info("Sincronizando Command Tree (Slash Commands) con Discord...")
-        synced = await self.tree.sync()
-        logger.info(f"¡Sincronización exitosa! {len(synced)} comando(s) registrados globalmente.")
         
         # Iniciar servidor de Health Check para Render
         asyncio.create_task(start_health_server())
@@ -69,8 +65,14 @@ class MusicBot(commands.Bot):
         """Callback ejecutado cuando el bot inicia sesión y está listo."""
         if self.user:
             logger.info(f"Bot autenticado correctamente como '{self.user.name}' (ID: {self.user.id})")
-            logger.info("El bot está listo para recibir comandos de música asistidos por Gemini AI 🤖🎵")
             
+            # Sincronizar el árbol de Slash Commands al conectar
+            try:
+                synced = await self.tree.sync()
+                logger.info(f"¡Sincronización exitosa! {len(synced)} comando(s) registrados globalmente.")
+            except Exception as e:
+                logger.error(f"Error al sincronizar command tree: {e}")
+
             activity = discord.Activity(
                 type=discord.ActivityType.listening,
                 name="/play | Gemini Music 🤖"
