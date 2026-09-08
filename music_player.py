@@ -7,7 +7,7 @@ import yt_dlp
 
 logger = logging.getLogger("MusicAIBot.Player")
 
-# Opciones de yt-dlp optimizadas con cliente Android Native para evitar bloqueos en la nube
+# Opciones de yt-dlp optimizadas para extracción rápida de audio
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'extractaudio': True,
@@ -22,12 +22,12 @@ YTDL_OPTIONS = {
     'source_address': '0.0.0.0',
     'extractor_args': {
         'youtube': {
-            'player_client': ['android', 'ios'],
+            'player_client': ['android', 'ios', 'mweb'],
             'skip': ['webpage']
         }
     },
     'http_headers': {
-        'User-Agent': 'com.google.android.youtube/19.29.37 (Linux; U; Android 14; US) gzip',
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
     }
 }
 
@@ -38,6 +38,16 @@ FFMPEG_OPTIONS = {
 }
 
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
+
+
+def is_webpage_url(url: str) -> bool:
+    """Comprueba si una URL es una página web de video/playlist en lugar de un stream directo de media."""
+    if not url or not isinstance(url, str) or not url.startswith(('http://', 'https://')):
+        return True
+    # URLs de páginas web de YouTube/SoundCloud
+    if '/watch?' in url or 'youtu.be/' in url or '/playlist?' in url or '/shorts/' in url:
+        return True
+    return False
 
 
 @dataclass
@@ -54,7 +64,6 @@ class Song:
         """Busca o procesa la URL con yt-dlp de forma asíncrona usando executor thread pool."""
         loop = asyncio.get_running_loop()
         
-        # Probar primero con YouTube Music (ytmsearch1:) si no es una URL directa
         is_url = query.startswith(("http://", "https://"))
         search_target = query if is_url else f"ytmsearch1:{query}"
 
@@ -73,30 +82,32 @@ class Song:
                 if not entry:
                     raise ValueError("La búsqueda no devolvió ninguna entrada válida.")
 
-                # Si es un resultado resumido, resolver la información completa del video/canción
                 stream_url = entry.get('url', '')
-                if not stream_url or not stream_url.startswith(('http://', 'https://')) or 'youtube.com' in stream_url or 'youtu.be' in stream_url:
+                
+                # Si la entrada es una página web o no tiene URL directa, extraer la info completa del video
+                if is_webpage_url(stream_url):
                     vid_url = entry.get('webpage_url') or (f"https://www.youtube.com/watch?v={entry.get('id')}" if entry.get('id') else None)
                     if vid_url:
-                        logger.info(f"Resolviendo stream directo desde URL: {vid_url}")
+                        logger.info(f"Resolviendo stream directo desde página web: {vid_url}")
                         entry = extractor_instance.extract_info(vid_url, download=False)
                         stream_url = entry.get('url', '')
 
-                # Buscar en los formatos disponibles si 'url' raíz es nula o inválida
-                if not stream_url or not stream_url.startswith(('http://', 'https://')):
+                # Buscar en la lista de formatos de audio si la raíz no tiene stream directo
+                if is_webpage_url(stream_url):
                     formats = entry.get('formats', [])
-                    audio_formats = [f for f in formats if f.get('vcodec') == 'none' and f.get('url')]
-                    if not audio_formats:
-                        audio_formats = [f for f in formats if f.get('url')]
+                    audio_formats = [
+                        f for f in formats 
+                        if f.get('url') and not is_webpage_url(f['url']) and (f.get('acodec') != 'none' or f.get('vcodec') == 'none')
+                    ]
                     if audio_formats:
                         audio_formats.sort(key=lambda f: f.get('abr') or f.get('tbr') or 0, reverse=True)
                         stream_url = audio_formats[0]['url']
 
-                if not stream_url or not stream_url.startswith(('http://', 'https://')) or 'youtube.com' in stream_url or 'youtu.be' in stream_url:
-                    raise ValueError(f"No se pudo resolver stream de audio directo para: {target}")
+                if is_webpage_url(stream_url):
+                    raise ValueError(f"No se pudo resolver un stream directo de media para: {target}")
 
                 entry['direct_stream_url'] = stream_url
-                logger.info(f"Stream directo obtenido exitosamente para '{entry.get('title')}': {str(stream_url)[:40]}...")
+                logger.info(f"Stream directo obtenido exitosamente para '{entry.get('title')}': {str(stream_url)[:50]}...")
                 return entry
 
             try:
@@ -109,7 +120,7 @@ class Song:
                     yt_target = query if is_url else f"ytsearch1:{query}"
                     return _resolve_entry(ytdl, yt_target)
                 except Exception as second_err:
-                    logger.warning(f"YouTube Estándar falló ({second_err}). Reintentando con cliente TVHTML5/Android VR...")
+                    logger.warning(f"YouTube Estándar falló ({second_err}). Reintentando con cliente TVHTML5...")
                     # 3. Intentar con cliente TVHTML5
                     fallback_opts = dict(YTDL_OPTIONS)
                     fallback_opts['extractor_args'] = {
@@ -131,7 +142,7 @@ class Song:
         stream_url = data.get("direct_stream_url") or data.get("url") or ""
         duration = int(data.get("duration", 0))
 
-        if not stream_url or not stream_url.startswith(('http://', 'https://')):
+        if is_webpage_url(stream_url):
             raise ValueError("No se pudo obtener el stream de audio directo.")
 
         return cls(
