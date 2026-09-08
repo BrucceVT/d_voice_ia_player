@@ -93,6 +93,10 @@ class Song:
                         audio_formats.sort(key=lambda f: f.get('abr') or f.get('tbr') or 0, reverse=True)
                         stream_url = audio_formats[0]['url']
 
+                # Si aún no hay stream de audio directo, lanzar error para activar la cadena de fallbacks
+                if not stream_url or not stream_url.startswith(('http://', 'https://')) or 'youtube.com' in stream_url or 'youtu.be' in stream_url:
+                    raise ValueError(f"No se pudo resolver stream de audio directo para: {target}")
+
                 entry['direct_stream_url'] = stream_url
                 logger.info(f"Stream directo obtenido exitosamente para '{entry.get('title')}': {str(stream_url)[:40]}...")
                 return entry
@@ -112,7 +116,7 @@ class Song:
                         return _resolve_entry(ytdl_fallback, search_target)
                 except Exception as second_err:
                     sc_target = query if is_url else f"scsearch1:{query}"
-                    logger.warning(f"YouTube bloqueó la búsqueda ({second_err}). Activando respaldo con SoundCloud ({sc_target})...")
+                    logger.warning(f"YouTube bloqueó la extracción ({second_err}). Activando respaldo con SoundCloud ({sc_target})...")
                     with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ytdl_sc:
                         return _resolve_entry(ytdl_sc, sc_target)
 
