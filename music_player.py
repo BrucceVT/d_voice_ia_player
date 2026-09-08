@@ -8,7 +8,7 @@ import yt_dlp
 
 logger = logging.getLogger("MusicAIBot.Player")
 
-# Opciones de yt-dlp optimizadas para extracción ultra-rápida en contenedores Docker Cloud
+# Opciones de yt-dlp optimizadas para extracción ultra-rápida en contenedores Docker Cloud (cliente único Android)
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'extractaudio': True,
@@ -20,16 +20,16 @@ YTDL_OPTIONS = {
     'logtostderr': False,
     'quiet': True,
     'no_warnings': True,
-    'socket_timeout': 5,
+    'socket_timeout': 8,
     'youtube_include_dash_manifest': False,
     'youtube_include_hls_manifest': False,
     'extractor_args': {
         'youtube': {
-            'player_client': ['android', 'ios', 'mweb', 'web']
+            'player_client': ['android']
         }
     },
     'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+        'User-Agent': 'com.google.android.youtube/19.29.37 (Linux; U; Android 14; US) gzip',
     }
 }
 
@@ -108,7 +108,7 @@ class Song:
                         audio_formats.sort(key=lambda f: f.get('abr') or f.get('tbr') or 0, reverse=True)
                         stream_url = audio_formats[0]['url']
 
-                # Si los formatos en memoria fallan, intentar la consulta secundaria al enlace de video como último recurso
+                # Si los formatos en memoria fallan, resolver los metadatos completos con la URL directa del video
                 if is_webpage_url(stream_url):
                     vid_url = entry.get('webpage_url') or (f"https://www.youtube.com/watch?v={entry.get('id')}" if entry.get('id') else None)
                     if vid_url:
@@ -134,22 +134,22 @@ class Song:
                 return entry
 
             try:
-                # 1. Búsqueda primaria en YouTube
+                # 1. Búsqueda primaria en YouTube con cliente único Android
                 return _resolve_entry(ytdl, search_target)
             except Exception as first_err:
-                logger.warning(f"Búsqueda primaria falló ({first_err}). Reintentando con cliente TVHTML5/Android...")
+                logger.warning(f"Búsqueda primaria falló ({first_err}). Reintentando con cliente TVHTML5...")
                 try:
-                    # 2. Intentar con clientes de respaldo TVHTML5
+                    # 2. Intentar con cliente de respaldo TVHTML5
                     fallback_opts = dict(YTDL_OPTIONS)
                     fallback_opts['extractor_args'] = {
                         'youtube': {
-                            'player_client': ['tvhtml5', 'android_vr', 'ios', 'web']
+                            'player_client': ['tvhtml5']
                         }
                     }
                     with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
                         return _resolve_entry(ytdl_fallback, search_target)
                 except Exception as second_err:
-                    logger.warning(f"Respaldo secundario falló ({second_err}). Intentando búsqueda directa YouTube Music...")
+                    logger.warning(f"Respaldo secundario falló ({second_err}). Intentando búsqueda en YouTube Music...")
                     ytm_target = cleaned_query if is_url else f"ytmsearch1:{cleaned_query}"
                     with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ytdl_ytm:
                         return _resolve_entry(ytdl_ytm, ytm_target)
