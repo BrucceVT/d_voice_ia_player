@@ -6,6 +6,21 @@ from google.genai import types
 
 logger = logging.getLogger("MusicAIBot.Gemini")
 
+def _clean_gemini_output(raw_text: str) -> str:
+    """Limpia y valida el resultado generado por Gemini, eliminando guiones huérfanos o prefijos."""
+    if not raw_text:
+        return ""
+    result = raw_text.strip().replace('"', '').replace("'", "")
+    if result.lower().startswith("topic:"):
+        result = result[6:].strip()
+    result = result.rstrip(" -:\t\n")
+    if "-" in result:
+        parts = result.split("-", 1)
+        if not parts[1].strip():
+            result = parts[0].strip()
+    return result
+
+
 class GeminiService:
     """Servicio de inteligencia artificial utilizando el SDK moderno google-genai.
     
@@ -24,8 +39,10 @@ class GeminiService:
             "Eres un DJ experto en música universal. Tu tarea es recibir una descripción informal, estado de ánimo o género "
             "y responder ÚNICAMENTE con el título exacto de UNA canción concreta y su artista en formato 'Artista - Canción'. "
             "Ejemplo: Si recibes 'rock argentino melancólico', responde 'Soda Stereo - Té Para Tres'. "
+            "OBLIGATORIO: Incluye SIEMPRE el título COMPLETO de la canción después del artista. "
+            "Jamás dejes la respuesta terminada en un guion '-' ni inconclusa. "
             "Jamás respondas con géneros, prefijos como 'Topic:', viñetas, explicaciones ni comillas. "
-            "Responde únicamente con el nombre del artista y la canción."
+            "Responde únicamente con el nombre del artista y el título completo de la canción."
         )
 
         prompt = f"Solicitud del usuario: '{user_prompt}'"
@@ -45,11 +62,8 @@ class GeminiService:
                     )
 
                     if response and response.text:
-                        result = response.text.strip().replace('"', '').replace("'", "")
-                        # Limpiar prefijos no deseados si Gemini llegase a incluir 'Topic:'
-                        if result.lower().startswith("topic:"):
-                            result = result[6:].strip()
-                        if result:
+                        result = _clean_gemini_output(response.text)
+                        if result and len(result) > 2:
                             logger.info(f"Gemini ({model_name}) interpretó exitosamente '{user_prompt}' -> '{result}'")
                             return result
                 except Exception as e:
@@ -94,10 +108,8 @@ class GeminiService:
                     )
 
                     if response and response.text:
-                        recommendation = response.text.strip().replace('"', '').replace("'", "")
-                        if recommendation.lower().startswith("topic:"):
-                            recommendation = recommendation[6:].strip()
-                        if recommendation:
+                        recommendation = _clean_gemini_output(response.text)
+                        if recommendation and len(recommendation) > 2:
                             logger.info(f"Gemini ({model_name}) generó recomendación -> '{recommendation}'")
                             return recommendation
                 except Exception as e:

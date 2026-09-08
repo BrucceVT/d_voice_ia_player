@@ -48,12 +48,17 @@ ssl_ctx = ssl._create_unverified_context()
 
 
 def sanitize_query(query: str) -> str:
-    """Normaliza texto eliminando acentos y tildes para evitar incompatibilidades."""
+    """Normaliza texto eliminando acentos, tildes y guiones huérfanos al final para evitar búsquedas incompletas."""
     if query.startswith(("http://", "https://")):
         return query
     normalized = unicodedata.normalize('NFKD', query)
     ascii_str = ''.join([c for c in normalized if not unicodedata.combining(c)])
-    return ascii_str.strip()
+    cleaned = ascii_str.strip().rstrip(" -:\t\n")
+    if "-" in cleaned:
+        parts = cleaned.split("-", 1)
+        if not parts[1].strip():
+            cleaned = parts[0].strip()
+    return cleaned
 
 
 def is_webpage_url(url: str) -> bool:
@@ -152,6 +157,44 @@ async def resolve_via_invidious_api(query: str) -> Optional[dict]:
     return None
 
 
+async def resolve_via_itunes_api(query: str) -> Optional[dict]:
+    """Resuelve la búsqueda y la URL directa de audio a través de iTunes Search API (100% libre de bloqueos de IP)."""
+    cleaned_q = sanitize_query(query)
+    if cleaned_q.startswith(("http://", "https://")):
+        return None
+
+    url = f"https://itunes.apple.com/search?term={urllib.parse.quote(cleaned_q)}&entity=song&limit=1"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+    loop = asyncio.get_running_loop()
+
+    def _fetch():
+        try:
+            with urllib.request.urlopen(req, timeout=4, context=ssl_ctx) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                results = data.get('results', [])
+                if results:
+                    item = results[0]
+                    artist = item.get('artistName', '')
+                    track = item.get('trackName', '')
+                    preview = item.get('previewUrl')
+                    title = f"{artist} - {track}" if artist and track else (track or artist or cleaned_q)
+                    webpage_url = item.get('trackViewUrl') or item.get('collectionViewUrl') or f"https://music.apple.com"
+                    duration = int(item.get('trackTimeMillis', 30000) / 1000)
+                    if preview:
+                        logger.info(f"iTunes Search API resolvió con éxito '{title}' (stream directo AAC)")
+                        return {
+                            "title": title,
+                            "webpage_url": webpage_url,
+                            "stream_url": preview,
+                            "duration": duration
+                        }
+        except Exception as e:
+            logger.warning(f"Error en iTunes Search API: {e}")
+        return None
+
+    return await loop.run_in_executor(None, _fetch)
+
+
 def get_direct_stream_from_info(info_dict: dict) -> Optional[str]:
     """Obtiene la URL directa de audio a partir del diccionario de información de yt-dlp."""
     if not info_dict:
@@ -191,7 +234,7 @@ class Song:
         loop = asyncio.get_running_loop()
         cleaned_query = sanitize_query(query)
 
-        # 1. Intentar obtener el stream directo a través de la API pública de Invidious (bypass de IP en la nube 100%)
+        # 1. Intentar obtener el stream directo a través de la API pública de Invidious
         invidious_data = await resolve_via_invidious_api(cleaned_query)
         if invidious_data and invidious_data.get("stream_url"):
             logger.info(f"Extracción exitosa mediante Invidious API para '{invidious_data['title']}'")
@@ -203,83 +246,90 @@ class Song:
                 requester=requester
             )
 
-        # 2. Fallback a yt-dlp si la API Invidious no estuviera disponible
+        # 2. Intentar yt-dlp con YouTube
         is_url = cleaned_query.startswith(("http://", "https://"))
         search_target = cleaned_query if is_url else f"ytsearch1:{cleaned_query}"
 
-        def _extract():
-            def _resolve_entry(extractor_instance, target):
-                logger.info(f"Extrayendo stream con yt-dlp para: {target}")
-                data = extractor_instance.extract_info(target, download=False)
-                if not data:
-                    raise ValueError(f"No se obtuvieron datos de extracción para {target}")
+        data = None
+        try:
+            def _extract():
+                def _resolve_entry(extractor_instance, target):
+                    logger.info(f"Extrayendo stream con yt-dlp para: {target}")
+                    info = extractor_instance.extract_info(target, download=False)
+                    if not info:
+                        raise ValueError(f"No se obtuvieron datos de extracción para {target}")
 
-                if 'entries' in data and data['entries']:
-                    entry = data['entries'][0]
-                else:
-                    entry = data
+                    if 'entries' in info and info['entries']:
+                        entry = info['entries'][0]
+                    else:
+                        entry = info
 
-                if not entry:
-                    raise ValueError("La búsqueda no devolvió ninguna entrada válida.")
+                    if not entry:
+                        raise ValueError("La búsqueda no devolvió ninguna entrada válida.")
 
-                stream_url = get_direct_stream_from_info(entry)
+                    stream_url = get_direct_stream_from_info(entry)
 
-                if not stream_url:
-                    vid_url = entry.get('webpage_url') or (f"https://www.youtube.com/watch?v={entry.get('id')}" if entry.get('id') else None)
-                    if vid_url:
-                        logger.info(f"Resolviendo metadatos completos desde video URL: {vid_url}")
-                        full_entry = extractor_instance.extract_info(vid_url, download=False)
-                        stream_url = get_direct_stream_from_info(full_entry)
-                        if stream_url:
-                            entry = full_entry
+                    if not stream_url:
+                        vid_url = entry.get('webpage_url') or (f"https://www.youtube.com/watch?v={entry.get('id')}" if entry.get('id') else None)
+                        if vid_url:
+                            logger.info(f"Resolviendo metadatos completos desde video URL: {vid_url}")
+                            full_entry = extractor_instance.extract_info(vid_url, download=False)
+                            stream_url = get_direct_stream_from_info(full_entry)
+                            if stream_url:
+                                entry = full_entry
 
-                if not stream_url:
-                    raise ValueError(f"No se pudo resolver un stream directo de media para: {target}")
+                    if not stream_url:
+                        raise ValueError(f"No se pudo resolver un stream directo de media para: {target}")
 
-                entry['direct_stream_url'] = stream_url
-                logger.info(f"Stream directo obtenido exitosamente para '{entry.get('title')}': {str(stream_url)[:50]}...")
-                return entry
+                    entry['direct_stream_url'] = stream_url
+                    logger.info(f"Stream directo obtenido exitosamente para '{entry.get('title')}': {str(stream_url)[:50]}...")
+                    return entry
 
-            try:
-                return _resolve_entry(ytdl, search_target)
-            except Exception as first_err:
-                logger.warning(f"Búsqueda primaria YouTube falló ({first_err}). Intentando SoundCloud fallback...")
-                if not is_url:
-                    sc_target = f"scsearch1:{cleaned_query}"
-                    try:
-                        return _resolve_entry(ytdl, sc_target)
-                    except Exception as sc_err:
-                        logger.warning(f"Búsqueda SoundCloud falló ({sc_err}). Reintentando YouTube TVHTML5...")
-
-                fallback_opts = dict(YTDL_OPTIONS)
-                fallback_opts['extractor_args'] = {
-                    'youtube': {
-                        'player_client': ['tvhtml5', 'web']
+                try:
+                    return _resolve_entry(ytdl, search_target)
+                except Exception as first_err:
+                    logger.warning(f"Búsqueda primaria YouTube falló ({first_err}). Reintentando con cliente TVHTML5...")
+                    fallback_opts = dict(YTDL_OPTIONS)
+                    fallback_opts['extractor_args'] = {
+                        'youtube': {
+                            'player_client': ['tvhtml5', 'web']
+                        }
                     }
-                }
-                with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
-                    return _resolve_entry(ytdl_fallback, search_target)
+                    with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
+                        return _resolve_entry(ytdl_fallback, search_target)
 
-        data = await loop.run_in_executor(None, _extract)
+            data = await loop.run_in_executor(None, _extract)
+        except Exception as yt_err:
+            logger.warning(f"yt-dlp falló para '{cleaned_query}': {yt_err}")
 
-        if not data:
-            raise ValueError(f"No se pudo encontrar ninguna canción con la consulta: {query}")
+        if data and data.get("direct_stream_url"):
+            title = data.get("title", "Canción Desconocida")
+            webpage_url = data.get("webpage_url") or (f"https://www.youtube.com/watch?v={data.get('id')}" if data.get('id') else query)
+            stream_url = data.get("direct_stream_url") or data.get("url") or ""
+            duration = int(data.get("duration", 0))
 
-        title = data.get("title", "Canción Desconocida")
-        webpage_url = data.get("webpage_url") or (f"https://www.youtube.com/watch?v={data.get('id')}" if data.get('id') else query)
-        stream_url = data.get("direct_stream_url") or data.get("url") or ""
-        duration = int(data.get("duration", 0))
+            if stream_url and not is_webpage_url(stream_url):
+                return cls(
+                    title=title,
+                    webpage_url=webpage_url,
+                    stream_url=stream_url,
+                    duration=duration,
+                    requester=requester
+                )
 
-        if not stream_url or is_webpage_url(stream_url):
-            raise ValueError("No se pudo obtener el stream de audio directo.")
+        # 3. Tier 3: Fallback a iTunes Search API (100% Libre de bloqueos de IP de datacenter)
+        logger.info(f"Iniciando Tier 3 iTunes Search API fallback para: '{cleaned_query}'")
+        itunes_data = await resolve_via_itunes_api(cleaned_query)
+        if itunes_data and itunes_data.get("stream_url"):
+            return cls(
+                title=itunes_data["title"],
+                webpage_url=itunes_data["webpage_url"],
+                stream_url=itunes_data["stream_url"],
+                duration=itunes_data["duration"],
+                requester=requester
+            )
 
-        return cls(
-            title=title,
-            webpage_url=webpage_url,
-            stream_url=stream_url,
-            duration=duration,
-            requester=requester
-        )
+        raise ValueError(f"No se pudo resolver el stream de audio para: '{query}'")
 
 
 class GuildMusicManager:
