@@ -32,10 +32,10 @@ YTDL_OPTIONS = {
     }
 }
 
-# Opciones de FFmpeg para reconexión activa de streams y optimización de buffer
+# Opciones de FFmpeg para reconexión activa de streams y remoción automática de silencios iniciales
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-vn',
+    'options': '-vn -filter:a "silenceremove=start_periods=1:start_duration=0.5:start_threshold=-45dB"',
 }
 
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
