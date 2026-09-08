@@ -47,7 +47,8 @@ async def main():
         "Eminem - Rabbit Run",
         "Soda Stereo - Te Para Tres",
         "Soda Stereo - De Musica Ligera",
-        "cancion run rabbit"
+        "cancion run rabbit",
+        "https://youtu.be/zC7Mn1_sDlk?si=MYEgU77T_4QqC2Ke"
     ]
 
     for q in test_queries:

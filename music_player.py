@@ -65,6 +65,43 @@ def is_webpage_url(url: str) -> bool:
     return False
 
 
+async def resolve_youtube_oembed_title(url: str) -> Optional[str]:
+    """Obtiene el título oficial de un video de YouTube sin autenticación ni bloqueos de IP mediante el endpoint público de oEmbed."""
+    if not any(domain in url for domain in ("youtube.com", "youtu.be")):
+        return None
+
+    oembed_url = f"https://www.youtube.com/oembed?url={urllib.parse.quote(url)}&format=json"
+    req = urllib.request.Request(oembed_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+    loop = asyncio.get_running_loop()
+
+    def _fetch():
+        try:
+            with urllib.request.urlopen(req, timeout=5, context=ssl_ctx) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode('utf-8'))
+                    return data.get("title")
+        except Exception as e:
+            logger.warning(f"Error resolviendo oEmbed para YouTube URL '{url}': {e}")
+        return None
+
+    return await loop.run_in_executor(None, _fetch)
+
+
+def extract_sc_entry(sc_target: str) -> Optional[dict]:
+    """Extrae la mejor entrada de audio completa desde SoundCloud dado un término scsearch."""
+    opts = dict(YTDL_OPTIONS)
+    with yt_dlp.YoutubeDL(opts) as ytdl_sc:
+        info = ytdl_sc.extract_info(sc_target, download=False)
+        if info and 'entries' in info and info['entries']:
+            full_tracks = [e for e in info['entries'] if e and e.get('duration', 0) > 45]
+            selected_entry = full_tracks[0] if full_tracks else info['entries'][0]
+            stream_url = get_direct_stream_from_info(selected_entry) or selected_entry.get('url')
+            if stream_url and not is_webpage_url(stream_url):
+                selected_entry['direct_stream_url'] = stream_url
+                return selected_entry
+    return None
+
+
 async def resolve_via_itunes_api(query: str) -> Optional[dict]:
     """Resuelve metadatos y título oficial de la canción a través de iTunes Search API."""
     cleaned_q = sanitize_query(query)
@@ -154,22 +191,7 @@ class Song:
         if not is_url:
             sc_target = f"scsearch5:{target_search_term}"
             try:
-                def _extract_sc():
-                    logger.info(f"Buscando canción COMPLETA en SoundCloud para: {sc_target}")
-                    opts = dict(YTDL_OPTIONS)
-                    with yt_dlp.YoutubeDL(opts) as ytdl_sc:
-                        info = ytdl_sc.extract_info(sc_target, download=False)
-                        if info and 'entries' in info and info['entries']:
-                            # Filtrar vistas previas de 30s (típicas de canales oficiales) y seleccionar la primera pista completa (> 45s)
-                            full_tracks = [e for e in info['entries'] if e and e.get('duration', 0) > 45]
-                            selected_entry = full_tracks[0] if full_tracks else info['entries'][0]
-                            stream_url = get_direct_stream_from_info(selected_entry) or selected_entry.get('url')
-                            if stream_url and not is_webpage_url(stream_url):
-                                selected_entry['direct_stream_url'] = stream_url
-                                return selected_entry
-                    return None
-
-                sc_data = await loop.run_in_executor(None, _extract_sc)
+                sc_data = await loop.run_in_executor(None, extract_sc_entry, sc_target)
                 if sc_data and sc_data.get("direct_stream_url"):
                     title = sc_data.get("title", target_search_term)
                     webpage_url = sc_data.get("webpage_url") or query
@@ -255,6 +277,32 @@ class Song:
                     duration=duration,
                     requester=requester
                 )
+
+        # 4. Fallback de resolución inteligente para URLs de YouTube cuando la IP del servidor es bloqueada ("Sign in to confirm you're not a bot")
+        if is_url and any(domain in cleaned_query for domain in ("youtube.com", "youtu.be")):
+            logger.info(f"YouTube bloqueó la extracción directa para la URL '{cleaned_query}'. Obteniendo título del video vía oEmbed...")
+            yt_title = await resolve_youtube_oembed_title(cleaned_query)
+            if yt_title:
+                clean_title = sanitize_query(yt_title)
+                logger.info(f"Título resuelto vía oEmbed: '{yt_title}'. Buscando pista alternativa en SoundCloud...")
+                sc_fallback_target = f"scsearch5:{clean_title}"
+                try:
+                    sc_data = await loop.run_in_executor(None, extract_sc_entry, sc_fallback_target)
+                    if sc_data and sc_data.get("direct_stream_url"):
+                        title = yt_title
+                        webpage_url = cleaned_query
+                        stream_url = sc_data.get("direct_stream_url")
+                        duration = int(sc_data.get("duration", 0))
+                        logger.info(f"Éxito: Audio resuelto vía SoundCloud para enlace de YouTube '{title}' ({duration}s)")
+                        return cls(
+                            title=title,
+                            webpage_url=webpage_url,
+                            stream_url=stream_url,
+                            duration=duration,
+                            requester=requester
+                        )
+                except Exception as sc_url_err:
+                    logger.warning(f"Fallback SoundCloud para URL de YouTube falló: {sc_url_err}")
 
         # 4. Fallback de emergencia a vista previa de iTunes si la extracción de YouTube y SoundCloud fallaran por completo
         logger.warning(f"Iniciando vista previa de iTunes como último recurso para: '{target_search_term}'")
