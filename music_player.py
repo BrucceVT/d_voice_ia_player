@@ -1,6 +1,9 @@
 import asyncio
+import json
 import logging
 import unicodedata
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from typing import Optional, List
 import discord
@@ -25,7 +28,7 @@ YTDL_OPTIONS = {
     'youtube_include_hls_manifest': False,
     'extractor_args': {
         'youtube': {
-            'player_client': ['android', 'ios']
+            'player_client': ['mweb', 'android', 'web_creator', 'ios']
         }
     },
     'http_headers': {
@@ -42,6 +45,15 @@ FFMPEG_OPTIONS = {
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 
 
+def sanitize_query(query: str) -> str:
+    """Normaliza texto eliminando acentos y tildes para evitar incompatibilidades."""
+    if query.startswith(("http://", "https://")):
+        return query
+    normalized = unicodedata.normalize('NFKD', query)
+    ascii_str = ''.join([c for c in normalized if not unicodedata.combining(c)])
+    return ascii_str.strip()
+
+
 def is_webpage_url(url: str) -> bool:
     """Comprueba si una URL es una página web de video/playlist en lugar de un stream directo de media."""
     if not url or not isinstance(url, str) or not url.startswith(('http://', 'https://')):
@@ -49,6 +61,43 @@ def is_webpage_url(url: str) -> bool:
     if '/watch?' in url or 'youtu.be/' in url or '/playlist?' in url or '/shorts/' in url:
         return True
     return False
+
+
+async def search_youtube_via_api(query: str) -> Optional[str]:
+    """Busca una canción usando APIs de Invidious/Piped para obtener la URL directa de video sin sufrir bloqueos de IP en la nube."""
+    if query.startswith(("http://", "https://")):
+        return query
+
+    encoded_q = urllib.parse.quote(query)
+    apis = [
+        f"https://api.piped.video/search?q={encoded_q}&filter=all",
+        f"https://pipedapi.kavin.rocks/search?q={encoded_q}&filter=all",
+        f"https://invidious.privacydev.net/api/v1/search?q={encoded_q}&type=video"
+    ]
+
+    loop = asyncio.get_running_loop()
+
+    for api_url in apis:
+        try:
+            req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            
+            def _fetch():
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    return json.loads(resp.read().decode('utf-8'))
+
+            data = await loop.run_in_executor(None, _fetch)
+            items = data.get("items") or data
+            if isinstance(items, list) and len(items) > 0:
+                for item in items:
+                    vid_id = item.get("videoId") or item.get("url", "").replace("/watch?v=", "")
+                    if vid_id and len(vid_id) > 5:
+                        resolved_url = f"https://www.youtube.com/watch?v={vid_id}"
+                        logger.info(f"API Piped/Invidious resolvió '{query}' -> '{resolved_url}'")
+                        return resolved_url
+        except Exception as e:
+            logger.debug(f"API {api_url} no respondió: {e}")
+
+    return None
 
 
 def get_direct_stream_from_info(info_dict: dict) -> Optional[str]:
@@ -63,14 +112,11 @@ def get_direct_stream_from_info(info_dict: dict) -> Optional[str]:
     # Buscar en la lista de formatos
     formats = info_dict.get('formats', [])
     if formats:
-        # Filtrar formatos con pista de audio activa (acodec != 'none')
         audio_formats = [f for f in formats if f.get('url') and f.get('acodec') != 'none']
         if not audio_formats:
-            # Fallback a cualquier formato con URL
             audio_formats = [f for f in formats if f.get('url')]
 
         if audio_formats:
-            # Ordenar por mejor calidad de audio (abr / tbr)
             audio_formats.sort(key=lambda f: (f.get('abr') or f.get('tbr') or 0), reverse=True)
             candidate = audio_formats[0].get('url')
             if candidate and not is_webpage_url(candidate):
@@ -93,9 +139,11 @@ class Song:
         """Busca o procesa la URL con yt-dlp de forma asíncrona usando executor thread pool."""
         loop = asyncio.get_running_loop()
         
-        cleaned_query = query.strip()
-        is_url = cleaned_query.startswith(("http://", "https://"))
-        search_target = cleaned_query if is_url else f"ytsearch1:{cleaned_query}"
+        cleaned_query = sanitize_query(query)
+        
+        # 1. Intentar primero resolver el Video ID usando APIs de búsqueda ultrarrápidas
+        direct_video_url = await search_youtube_via_api(cleaned_query)
+        search_target = direct_video_url if direct_video_url else (cleaned_query if cleaned_query.startswith(("http://", "https://")) else f"ytsearch1:{cleaned_query}")
 
         def _extract():
             def _resolve_entry(extractor_instance, target):
@@ -133,11 +181,10 @@ class Song:
                 return entry
 
             try:
-                # 1. Búsqueda primaria en YouTube (Cliente Android/iOS)
+                # Búsqueda primaria
                 return _resolve_entry(ytdl, search_target)
             except Exception as first_err:
                 logger.warning(f"Búsqueda primaria falló ({first_err}). Reintentando con cliente TVHTML5...")
-                # 2. Intentar con cliente de respaldo TVHTML5
                 fallback_opts = dict(YTDL_OPTIONS)
                 fallback_opts['extractor_args'] = {
                     'youtube': {
@@ -257,7 +304,7 @@ class GuildMusicManager:
     async def resume(self) -> bool:
         """Reanuda la reproducción pausada."""
         if self.voice_client and self.voice_client.is_paused():
-            self.resume()
+            self.voice_client.resume()
             return True
         return False
 
