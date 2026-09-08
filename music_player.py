@@ -7,7 +7,7 @@ import yt_dlp
 
 logger = logging.getLogger("MusicAIBot.Player")
 
-# Opciones de yt-dlp optimizadas para evitar descargas a disco y acelerar búsqueda
+# Opciones de yt-dlp optimizadas con spoofing de cliente móvil (iOS/mweb) para bypass en la nube
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'extractaudio': True,
@@ -19,8 +19,17 @@ YTDL_OPTIONS = {
     'logtostderr': False,
     'quiet': True,
     'no_warnings': True,
-    'default_search': 'auto',
+    'default_search': 'ytsearch',
     'source_address': '0.0.0.0',
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['ios', 'mweb', 'android'],
+            'skip': ['webpage']
+        }
+    },
+    'http_headers': {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+    }
 }
 
 # Opciones de FFmpeg para reconexión activa de streams y optimización de buffer
@@ -50,11 +59,24 @@ class Song:
         search_target = query if query.startswith(("http://", "https://")) else f"ytsearch:{query}"
 
         def _extract():
-            data = ytdl.extract_info(search_target, download=False)
-            if 'entries' in data and data['entries']:
-                # Tomar la primera entrada de los resultados de búsqueda
-                return data['entries'][0]
-            return data
+            try:
+                data = ytdl.extract_info(search_target, download=False)
+                if 'entries' in data and data['entries']:
+                    return data['entries'][0]
+                return data
+            except Exception as first_err:
+                logger.warning(f"Extracción primaria falló ({first_err}). Reintentando con cliente TVHTML5/iOS...")
+                fallback_opts = dict(YTDL_OPTIONS)
+                fallback_opts['extractor_args'] = {
+                    'youtube': {
+                        'player_client': ['tvhtml5', 'ios', 'android_vr']
+                    }
+                }
+                with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
+                    data = ytdl_fallback.extract_info(search_target, download=False)
+                    if 'entries' in data and data['entries']:
+                        return data['entries'][0]
+                    return data
 
         data = await loop.run_in_executor(None, _extract)
 
