@@ -34,6 +34,7 @@ class GeminiService:
 
         for model_name in self.candidate_models:
             try:
+                logger.info(f"Invocando Gemini API ({model_name}) para prompt: '{user_prompt}'")
                 response = await self.client.aio.models.generate_content(
                     model=model_name,
                     contents=prompt,
@@ -46,12 +47,14 @@ class GeminiService:
 
                 if response and response.text:
                     result = response.text.strip()
-                    logger.info(f"Gemini ({model_name}) interpretó prompt '{user_prompt}' -> '{result}'")
+                    # Eliminar comillas extras si las hay
+                    result = result.replace('"', '').replace("'", "")
+                    logger.info(f"Gemini ({model_name}) interpretó exitosamente '{user_prompt}' -> '{result}'")
                     return result
             except Exception as e:
-                logger.warning(f"Error con modelo Gemini {model_name}: {e}. Intentando modelo alternativo...")
+                logger.warning(f"Error al invocar modelo Gemini {model_name}: {e}")
 
-        logger.error("Todos los modelos de Gemini fallaron. Retornando prompt original del usuario.")
+        logger.error(f"No se pudo interpretar prompt con Gemini AI. Usando entrada directa: '{user_prompt}'")
         return user_prompt
 
     async def recommend_next_song(self, history: List[str]) -> str:
@@ -86,7 +89,7 @@ class GeminiService:
                 )
 
                 if response and response.text:
-                    recommendation = response.text.strip()
+                    recommendation = response.text.strip().replace('"', '').replace("'", "")
                     logger.info(f"Gemini ({model_name}) generó recomendación -> '{recommendation}'")
                     return recommendation
             except Exception as e:

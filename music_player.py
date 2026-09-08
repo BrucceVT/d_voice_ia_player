@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import urllib.parse
 from dataclasses import dataclass
 from typing import Optional, List
 import discord
@@ -22,11 +23,11 @@ YTDL_OPTIONS = {
     'source_address': '0.0.0.0',
     'extractor_args': {
         'youtube': {
-            'player_client': ['ios', 'android', 'mweb']
+            'player_client': ['android', 'ios', 'mweb', 'web']
         }
     },
     'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
     }
 }
 
@@ -43,7 +44,6 @@ def is_webpage_url(url: str) -> bool:
     """Comprueba si una URL es una página web de video/playlist en lugar de un stream directo de media."""
     if not url or not isinstance(url, str) or not url.startswith(('http://', 'https://')):
         return True
-    # URLs de páginas web de YouTube
     if '/watch?' in url or 'youtu.be/' in url or '/playlist?' in url or '/shorts/' in url:
         return True
     return False
@@ -63,8 +63,9 @@ class Song:
         """Busca o procesa la URL con yt-dlp de forma asíncrona usando executor thread pool."""
         loop = asyncio.get_running_loop()
         
-        is_url = query.startswith(("http://", "https://"))
-        search_target = query if is_url else f"ytsearch1:{query}"
+        cleaned_query = query.strip()
+        is_url = cleaned_query.startswith(("http://", "https://"))
+        search_target = cleaned_query if is_url else f"ytsearch1:{cleaned_query}"
 
         def _extract():
             def _resolve_entry(extractor_instance, target):
@@ -81,21 +82,23 @@ class Song:
                 if not entry:
                     raise ValueError("La búsqueda no devolvió ninguna entrada válida.")
 
-                # Si es un resultado de búsqueda, resolver la info completa del video usando su URL específica
+                # Forzar siempre la extracción de los metadatos completos del video
                 vid_url = entry.get('webpage_url') or (f"https://www.youtube.com/watch?v={entry.get('id')}" if entry.get('id') else None)
                 if vid_url:
-                    logger.info(f"Resolviendo metadatos de stream desde video URL: {vid_url}")
+                    logger.info(f"Resolviendo metadatos completos desde video URL: {vid_url}")
                     entry = extractor_instance.extract_info(vid_url, download=False)
 
                 stream_url = entry.get('url', '')
 
-                # Buscar en la lista de formatos de audio si la raíz no tiene stream directo
+                # Buscar en la lista de formatos de audio si la raíz es una página web o nula
                 if is_webpage_url(stream_url):
                     formats = entry.get('formats', [])
                     audio_formats = [
                         f for f in formats 
                         if f.get('url') and not is_webpage_url(f['url']) and (f.get('acodec') != 'none' or f.get('vcodec') == 'none')
                     ]
+                    if not audio_formats:
+                        audio_formats = [f for f in formats if f.get('url') and not is_webpage_url(f['url'])]
                     if audio_formats:
                         audio_formats.sort(key=lambda f: f.get('abr') or f.get('tbr') or 0, reverse=True)
                         stream_url = audio_formats[0]['url']
@@ -111,16 +114,22 @@ class Song:
                 # 1. Búsqueda primaria en YouTube
                 return _resolve_entry(ytdl, search_target)
             except Exception as first_err:
-                logger.warning(f"Búsqueda primaria falló ({first_err}). Reintentando con cliente TVHTML5/Android VR...")
-                # 2. Intentar con clientes de respaldo TVHTML5
-                fallback_opts = dict(YTDL_OPTIONS)
-                fallback_opts['extractor_args'] = {
-                    'youtube': {
-                        'player_client': ['tvhtml5', 'android_vr', 'ios']
+                logger.warning(f"Búsqueda primaria falló ({first_err}). Reintentando con cliente TVHTML5/Android...")
+                try:
+                    # 2. Intentar con clientes de respaldo TVHTML5
+                    fallback_opts = dict(YTDL_OPTIONS)
+                    fallback_opts['extractor_args'] = {
+                        'youtube': {
+                            'player_client': ['tvhtml5', 'android_vr', 'ios', 'web']
+                        }
                     }
-                }
-                with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
-                    return _resolve_entry(ytdl_fallback, search_target)
+                    with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
+                        return _resolve_entry(ytdl_fallback, search_target)
+                except Exception as second_err:
+                    logger.warning(f"Respaldo secundario falló ({second_err}). Intentando búsqueda directa YouTube Music...")
+                    ytm_target = cleaned_query if is_url else f"ytmsearch1:{cleaned_query}"
+                    with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ytdl_ytm:
+                        return _resolve_entry(ytdl_ytm, ytm_target)
 
         data = await loop.run_in_executor(None, _extract)
 
