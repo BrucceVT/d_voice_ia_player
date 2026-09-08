@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import sys
 import discord
 from discord.ext import commands
@@ -7,6 +8,33 @@ from discord.ext import commands
 from config import config
 
 logger = logging.getLogger("MusicAIBot.Main")
+
+
+async def handle_health_check(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    """Responde 200 OK a las peticiones HTTP de Render (Health Check)."""
+    try:
+        await reader.read(1024)
+        response = (
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/plain\r\n"
+            "Content-Length: 17\r\n"
+            "Connection: close\r\n\r\n"
+            "Bot status: OK 🤖"
+        )
+        writer.write(response.encode("utf-8"))
+        await writer.drain()
+    except Exception as e:
+        logger.debug(f"Error en health check request: {e}")
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+
+async def start_health_server() -> None:
+    """Inicia un servidor HTTP ligero para satisfacer el Health Check de Render Web Service."""
+    port = int(os.getenv("PORT", "8080"))
+    server = await asyncio.start_server(handle_health_check, "0.0.0.0", port)
+    logger.info(f"Servidor HTTP de Health Check escuchando en 0.0.0.0:{port}")
 
 
 class MusicBot(commands.Bot):
@@ -32,6 +60,9 @@ class MusicBot(commands.Bot):
         logger.info("Sincronizando Command Tree (Slash Commands) con Discord...")
         synced = await self.tree.sync()
         logger.info(f"¡Sincronización exitosa! {len(synced)} comando(s) registrados globalmente.")
+        
+        # Iniciar servidor de Health Check para Render
+        asyncio.create_task(start_health_server())
 
     async def on_ready(self) -> None:
         """Callback ejecutado cuando el bot inicia sesión y está listo."""
@@ -39,7 +70,6 @@ class MusicBot(commands.Bot):
             logger.info(f"Bot autenticado correctamente como '{self.user.name}' (ID: {self.user.id})")
             logger.info("El bot está listo para recibir comandos de música asistidos por Gemini AI 🤖🎵")
             
-            # Establecer estado de presencia
             activity = discord.Activity(
                 type=discord.ActivityType.listening,
                 name="/play | Gemini Music 🤖"
