@@ -8,7 +8,7 @@ import yt_dlp
 
 logger = logging.getLogger("MusicAIBot.Player")
 
-# Opciones de yt-dlp optimizadas para extracción directa y rápida de streams de audio
+# Opciones de yt-dlp optimizadas para extracción ultra-rápida en contenedores Docker Cloud
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'extractaudio': True,
@@ -20,8 +20,9 @@ YTDL_OPTIONS = {
     'logtostderr': False,
     'quiet': True,
     'no_warnings': True,
-    'source_address': '0.0.0.0',
-    'socket_timeout': 10,
+    'socket_timeout': 5,
+    'youtube_include_dash_manifest': False,
+    'youtube_include_hls_manifest': False,
     'extractor_args': {
         'youtube': {
             'player_client': ['android', 'ios', 'mweb', 'web']
