@@ -9,13 +9,13 @@ class GeminiService:
     """Servicio de inteligencia artificial utilizando el SDK moderno google-genai.
     
     Implementa llamadas totalmente asíncronas vía client.aio.models.generate_content
-    para no bloquear el bucle de eventos de asyncio.
+    con fallbacks automáticos de modelos (gemini-2.5-flash, gemini-2.0-flash, gemini-1.5-flash).
     """
 
-    def __init__(self, api_key: str, model_name: str = "gemini-2.5-flash"):
+    def __init__(self, api_key: str):
         """Inicializa el cliente de Google GenAI."""
         self.client = genai.Client(api_key=api_key)
-        self.model_name = model_name
+        self.candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
 
     async def interpret_search_prompt(self, user_prompt: str) -> str:
         """Interpreta una solicitud o descripción informal y devuelve un término de búsqueda preciso.
@@ -32,34 +32,30 @@ class GeminiService:
 
         prompt = f"Solicitud del usuario: '{user_prompt}'"
 
-        try:
-            response = await self.client.aio.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    temperature=0.3,
-                    max_output_tokens=100,
+        for model_name in self.candidate_models:
+            try:
+                response = await self.client.aio.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=0.3,
+                        max_output_tokens=100,
+                    )
                 )
-            )
 
-            result = response.text.strip() if response.text else user_prompt
-            logger.info(f"Gemini interpretó prompt '{user_prompt}' -> '{result}'")
-            return result
-        except Exception as e:
-            logger.error(f"Error al invocar a Gemini en interpret_search_prompt: {e}")
-            # Fallback en caso de error de la API
-            return user_prompt
+                if response and response.text:
+                    result = response.text.strip()
+                    logger.info(f"Gemini ({model_name}) interpretó prompt '{user_prompt}' -> '{result}'")
+                    return result
+            except Exception as e:
+                logger.warning(f"Error con modelo Gemini {model_name}: {e}. Intentando modelo alternativo...")
+
+        logger.error("Todos los modelos de Gemini fallaron. Retornando prompt original del usuario.")
+        return user_prompt
 
     async def recommend_next_song(self, history: List[str]) -> str:
-        """Analiza el historial reciente de reproducciones y recomienda la siguiente canción más coherente.
-        
-        Args:
-            history: Lista con los títulos de las últimas canciones reproducidas.
-            
-        Returns:
-            Término de búsqueda recomendado en formato '[Título] [Artista]'.
-        """
+        """Analiza el historial reciente de reproducciones y recomienda la siguiente canción más coherente."""
         if not history:
             history_str = "Variado / Éxitos populares"
         else:
@@ -77,20 +73,23 @@ class GeminiService:
             "¿Cuál debería ser la siguiente canción recomendada?"
         )
 
-        try:
-            response = await self.client.aio.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    temperature=0.7,
-                    max_output_tokens=100,
+        for model_name in self.candidate_models:
+            try:
+                response = await self.client.aio.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=0.7,
+                        max_output_tokens=100,
+                    )
                 )
-            )
 
-            recommendation = response.text.strip() if response.text else "Queen - Bohemian Rhapsody"
-            logger.info(f"Gemini generó recomendación basada en historial -> '{recommendation}'")
-            return recommendation
-        except Exception as e:
-            logger.error(f"Error al invocar a Gemini en recommend_next_song: {e}")
-            return "Soda Stereo - De Música Ligera"
+                if response and response.text:
+                    recommendation = response.text.strip()
+                    logger.info(f"Gemini ({model_name}) generó recomendación -> '{recommendation}'")
+                    return recommendation
+            except Exception as e:
+                logger.warning(f"Error con modelo Gemini {model_name} en recommend: {e}")
+
+        return "Soda Stereo - De Música Ligera"
