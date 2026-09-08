@@ -8,7 +8,7 @@ import yt_dlp
 
 logger = logging.getLogger("MusicAIBot.Player")
 
-# Opciones de yt-dlp optimizadas para extracción ultra-rápida en contenedores Docker Cloud (cliente único Android)
+# Opciones de yt-dlp optimizadas para extracción completa de audio sin descargas a disco
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'extractaudio': True,
@@ -25,11 +25,11 @@ YTDL_OPTIONS = {
     'youtube_include_hls_manifest': False,
     'extractor_args': {
         'youtube': {
-            'player_client': ['android']
+            'player_client': ['android', 'ios']
         }
     },
     'http_headers': {
-        'User-Agent': 'com.google.android.youtube/19.29.37 (Linux; U; Android 14; US) gzip',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
     }
 }
 
@@ -42,15 +42,6 @@ FFMPEG_OPTIONS = {
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 
 
-def sanitize_query(query: str) -> str:
-    """Normaliza texto eliminando acentos y tildes para evitar incompatibilidades en yt-dlp."""
-    if query.startswith(("http://", "https://")):
-        return query
-    normalized = unicodedata.normalize('NFKD', query)
-    ascii_str = ''.join([c for c in normalized if not unicodedata.combining(c)])
-    return ascii_str.strip()
-
-
 def is_webpage_url(url: str) -> bool:
     """Comprueba si una URL es una página web de video/playlist en lugar de un stream directo de media."""
     if not url or not isinstance(url, str) or not url.startswith(('http://', 'https://')):
@@ -58,6 +49,34 @@ def is_webpage_url(url: str) -> bool:
     if '/watch?' in url or 'youtu.be/' in url or '/playlist?' in url or '/shorts/' in url:
         return True
     return False
+
+
+def get_direct_stream_from_info(info_dict: dict) -> Optional[str]:
+    """Obtiene la URL directa de audio a partir del diccionario de información de yt-dlp."""
+    if not info_dict:
+        return None
+
+    url = info_dict.get('url')
+    if url and not is_webpage_url(url):
+        return url
+
+    # Buscar en la lista de formatos
+    formats = info_dict.get('formats', [])
+    if formats:
+        # Filtrar formatos con pista de audio activa (acodec != 'none')
+        audio_formats = [f for f in formats if f.get('url') and f.get('acodec') != 'none']
+        if not audio_formats:
+            # Fallback a cualquier formato con URL
+            audio_formats = [f for f in formats if f.get('url')]
+
+        if audio_formats:
+            # Ordenar por mejor calidad de audio (abr / tbr)
+            audio_formats.sort(key=lambda f: (f.get('abr') or f.get('tbr') or 0), reverse=True)
+            candidate = audio_formats[0].get('url')
+            if candidate and not is_webpage_url(candidate):
+                return candidate
+
+    return None
 
 
 @dataclass
@@ -74,7 +93,7 @@ class Song:
         """Busca o procesa la URL con yt-dlp de forma asíncrona usando executor thread pool."""
         loop = asyncio.get_running_loop()
         
-        cleaned_query = sanitize_query(query)
+        cleaned_query = query.strip()
         is_url = cleaned_query.startswith(("http://", "https://"))
         search_target = cleaned_query if is_url else f"ytsearch1:{cleaned_query}"
 
@@ -93,40 +112,20 @@ class Song:
                 if not entry:
                     raise ValueError("La búsqueda no devolvió ninguna entrada válida.")
 
-                # Intentar obtener la URL de stream directo de la raíz o desde la lista de formatos
-                stream_url = entry.get('url', '')
+                # Intentar obtener el stream directo inmediatamente del objeto inicial
+                stream_url = get_direct_stream_from_info(entry)
 
-                if is_webpage_url(stream_url):
-                    formats = entry.get('formats', [])
-                    audio_formats = [
-                        f for f in formats 
-                        if f.get('url') and not is_webpage_url(f['url']) and (f.get('acodec') != 'none' or f.get('vcodec') == 'none')
-                    ]
-                    if not audio_formats:
-                        audio_formats = [f for f in formats if f.get('url') and not is_webpage_url(f['url'])]
-                    if audio_formats:
-                        audio_formats.sort(key=lambda f: f.get('abr') or f.get('tbr') or 0, reverse=True)
-                        stream_url = audio_formats[0]['url']
-
-                # Si los formatos en memoria fallan, resolver los metadatos completos con la URL directa del video
-                if is_webpage_url(stream_url):
+                # Si no está presente, resolver metadatos completos usando la URL específica del video
+                if not stream_url:
                     vid_url = entry.get('webpage_url') or (f"https://www.youtube.com/watch?v={entry.get('id')}" if entry.get('id') else None)
                     if vid_url:
-                        logger.info(f"Resolviendo metadatos secundarios desde video URL: {vid_url}")
+                        logger.info(f"Resolviendo metadatos completos desde video URL: {vid_url}")
                         full_entry = extractor_instance.extract_info(vid_url, download=False)
-                        stream_url = full_entry.get('url', '')
-                        if is_webpage_url(stream_url):
-                            formats = full_entry.get('formats', [])
-                            audio_formats = [
-                                f for f in formats 
-                                if f.get('url') and not is_webpage_url(f['url']) and (f.get('acodec') != 'none' or f.get('vcodec') == 'none')
-                            ]
-                            if audio_formats:
-                                audio_formats.sort(key=lambda f: f.get('abr') or f.get('tbr') or 0, reverse=True)
-                                stream_url = audio_formats[0]['url']
-                        entry = full_entry
+                        stream_url = get_direct_stream_from_info(full_entry)
+                        if stream_url:
+                            entry = full_entry
 
-                if is_webpage_url(stream_url):
+                if not stream_url:
                     raise ValueError(f"No se pudo resolver un stream directo de media para: {target}")
 
                 entry['direct_stream_url'] = stream_url
@@ -134,25 +133,19 @@ class Song:
                 return entry
 
             try:
-                # 1. Búsqueda primaria en YouTube con cliente único Android
+                # 1. Búsqueda primaria en YouTube (Cliente Android/iOS)
                 return _resolve_entry(ytdl, search_target)
             except Exception as first_err:
                 logger.warning(f"Búsqueda primaria falló ({first_err}). Reintentando con cliente TVHTML5...")
-                try:
-                    # 2. Intentar con cliente de respaldo TVHTML5
-                    fallback_opts = dict(YTDL_OPTIONS)
-                    fallback_opts['extractor_args'] = {
-                        'youtube': {
-                            'player_client': ['tvhtml5']
-                        }
+                # 2. Intentar con cliente de respaldo TVHTML5
+                fallback_opts = dict(YTDL_OPTIONS)
+                fallback_opts['extractor_args'] = {
+                    'youtube': {
+                        'player_client': ['tvhtml5', 'web']
                     }
-                    with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
-                        return _resolve_entry(ytdl_fallback, search_target)
-                except Exception as second_err:
-                    logger.warning(f"Respaldo secundario falló ({second_err}). Intentando búsqueda en YouTube Music...")
-                    ytm_target = cleaned_query if is_url else f"ytmsearch1:{cleaned_query}"
-                    with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ytdl_ytm:
-                        return _resolve_entry(ytdl_ytm, ytm_target)
+                }
+                with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
+                    return _resolve_entry(ytdl_fallback, search_target)
 
         data = await loop.run_in_executor(None, _extract)
 
@@ -164,7 +157,7 @@ class Song:
         stream_url = data.get("direct_stream_url") or data.get("url") or ""
         duration = int(data.get("duration", 0))
 
-        if is_webpage_url(stream_url):
+        if not stream_url or is_webpage_url(stream_url):
             raise ValueError("No se pudo obtener el stream de audio directo.")
 
         return cls(
@@ -264,7 +257,7 @@ class GuildMusicManager:
     async def resume(self) -> bool:
         """Reanuda la reproducción pausada."""
         if self.voice_client and self.voice_client.is_paused():
-            self.voice_client.resume()
+            self.resume()
             return True
         return False
 
