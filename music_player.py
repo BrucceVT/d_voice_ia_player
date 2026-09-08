@@ -14,7 +14,7 @@ logger = logging.getLogger("MusicAIBot.Player")
 
 # Opciones de yt-dlp optimizadas para extracción completa de audio sin descargas a disco
 YTDL_OPTIONS = {
-    'format': 'bestaudio/best',
+    'format': 'ba/ba*/bestaudio/best',
     'extractaudio': True,
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
     'restrictfilenames': True,
@@ -27,7 +27,7 @@ YTDL_OPTIONS = {
     'socket_timeout': 10,
     'extractor_args': {
         'youtube': {
-            'player_client': ['android', 'ios', 'mweb']
+            'player_client': ['android_vr', 'android', 'web', 'tvhtml5']
         }
     }
 }
@@ -289,11 +289,11 @@ class Song:
                 try:
                     sc_data = await loop.run_in_executor(None, extract_sc_entry, sc_fallback_target)
                     if sc_data and sc_data.get("direct_stream_url"):
-                        title = yt_title
-                        webpage_url = cleaned_query
+                        title = sc_data.get("title") or yt_title
+                        webpage_url = sc_data.get("webpage_url") or cleaned_query
                         stream_url = sc_data.get("direct_stream_url")
                         duration = int(sc_data.get("duration", 0))
-                        logger.info(f"Éxito: Audio resuelto vía SoundCloud para enlace de YouTube '{title}' ({duration}s)")
+                        logger.info(f"Éxito: Audio resuelto vía SoundCloud para '{title}' ({duration}s)")
                         return cls(
                             title=title,
                             webpage_url=webpage_url,
