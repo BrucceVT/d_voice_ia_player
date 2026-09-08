@@ -7,18 +7,29 @@ from google.genai import types
 logger = logging.getLogger("MusicAIBot.Gemini")
 
 def _clean_gemini_output(raw_text: str) -> str:
-    """Limpia y valida el resultado generado por Gemini, eliminando guiones huérfanos o prefijos."""
+    """Limpia y valida el resultado generado por Gemini, asegurando el formato 'Artista - Canción'."""
     if not raw_text:
         return ""
     result = raw_text.strip().replace('"', '').replace("'", "")
     if result.lower().startswith("topic:"):
         result = result[6:].strip()
     result = result.rstrip(" -:\t\n")
+    
+    # Validar que tenga el formato Artista - Canción completo
     if "-" in result:
         parts = result.split("-", 1)
-        if not parts[1].strip():
-            result = parts[0].strip()
-    return result
+        artist = parts[0].strip()
+        song = parts[1].strip()
+        if artist and song and len(song) >= 2 and len(artist) >= 2:
+            return f"{artist} - {song}"
+        return ""  # Incompleto (ej: 'Soda -'), descartar para usar fallback
+        
+    # Si no tiene guion, verificar que sea al menos de 2 palabras (ej: 'Soda Stereo Té Para Tres')
+    words = result.split()
+    if len(words) >= 2 and len(result) >= 5:
+        return result
+        
+    return ""
 
 
 class GeminiService:

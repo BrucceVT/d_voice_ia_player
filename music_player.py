@@ -158,7 +158,7 @@ async def resolve_via_invidious_api(query: str) -> Optional[dict]:
 
 
 async def resolve_via_itunes_api(query: str) -> Optional[dict]:
-    """Resuelve la búsqueda y la URL directa de audio a través de iTunes Search API (100% libre de bloqueos de IP)."""
+    """Resuelve metadatos oficiales a través de iTunes Search API."""
     cleaned_q = sanitize_query(query)
     if cleaned_q.startswith(("http://", "https://")):
         return None
@@ -180,14 +180,12 @@ async def resolve_via_itunes_api(query: str) -> Optional[dict]:
                     title = f"{artist} - {track}" if artist and track else (track or artist or cleaned_q)
                     webpage_url = item.get('trackViewUrl') or item.get('collectionViewUrl') or f"https://music.apple.com"
                     duration = int(item.get('trackTimeMillis', 30000) / 1000)
-                    if preview:
-                        logger.info(f"iTunes Search API resolvió con éxito '{title}' (stream directo AAC)")
-                        return {
-                            "title": title,
-                            "webpage_url": webpage_url,
-                            "stream_url": preview,
-                            "duration": duration
-                        }
+                    return {
+                        "title": title,
+                        "webpage_url": webpage_url,
+                        "stream_url": preview,
+                        "duration": duration
+                    }
         except Exception as e:
             logger.warning(f"Error en iTunes Search API: {e}")
         return None
@@ -234,10 +232,10 @@ class Song:
         loop = asyncio.get_running_loop()
         cleaned_query = sanitize_query(query)
 
-        # 1. Intentar obtener el stream directo a través de la API pública de Invidious
+        # 1. Intentar obtener el stream completo a través de la API pública de Invidious
         invidious_data = await resolve_via_invidious_api(cleaned_query)
         if invidious_data and invidious_data.get("stream_url"):
-            logger.info(f"Extracción exitosa mediante Invidious API para '{invidious_data['title']}'")
+            logger.info(f"Extracción exitosa mediante Invidious API para '{invidious_data['title']}' ({invidious_data['duration']}s)")
             return cls(
                 title=invidious_data["title"],
                 webpage_url=invidious_data["webpage_url"],
@@ -317,17 +315,35 @@ class Song:
                     requester=requester
                 )
 
-        # 3. Tier 3: Fallback a iTunes Search API (100% Libre de bloqueos de IP de datacenter)
-        logger.info(f"Iniciando Tier 3 iTunes Search API fallback para: '{cleaned_query}'")
+        # 3. Tier 3: Resolver título oficial con iTunes y reintentar resolución de stream completo
+        logger.info(f"Iniciando Tier 3 iTunes Search API fallback para resolver título exacto de: '{cleaned_query}'")
         itunes_data = await resolve_via_itunes_api(cleaned_query)
-        if itunes_data and itunes_data.get("stream_url"):
-            return cls(
-                title=itunes_data["title"],
-                webpage_url=itunes_data["webpage_url"],
-                stream_url=itunes_data["stream_url"],
-                duration=itunes_data["duration"],
-                requester=requester
-            )
+        if itunes_data:
+            official_title = itunes_data["title"]
+            logger.info(f"iTunes identificó el título oficial: '{official_title}'. Reintentando extracción de stream completo...")
+            
+            # Reintentar Invidious con el título exacto resuelto por iTunes
+            full_invidious = await resolve_via_invidious_api(official_title)
+            if full_invidious and full_invidious.get("stream_url"):
+                logger.info(f"Extracción exitosa de canción COMPLETA mediante Invidious para '{official_title}' ({full_invidious['duration']}s)")
+                return cls(
+                    title=full_invidious["title"],
+                    webpage_url=full_invidious["webpage_url"],
+                    stream_url=full_invidious["stream_url"],
+                    duration=full_invidious["duration"],
+                    requester=requester
+                )
+
+            # Si el stream completo no pudo obtenerse, usar preview de iTunes como último recurso
+            if itunes_data.get("stream_url"):
+                logger.warning(f"Utilizando vista previa de iTunes para '{official_title}' como último recurso")
+                return cls(
+                    title=official_title,
+                    webpage_url=itunes_data["webpage_url"],
+                    stream_url=itunes_data["stream_url"],
+                    duration=itunes_data["duration"],
+                    requester=requester
+                )
 
         raise ValueError(f"No se pudo resolver el stream de audio para: '{query}'")
 
