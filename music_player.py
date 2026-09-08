@@ -7,6 +7,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Optional, List
+import re
 import discord
 import yt_dlp
 
@@ -27,7 +28,7 @@ YTDL_OPTIONS = {
     'socket_timeout': 10,
     'extractor_args': {
         'youtube': {
-            'player_client': ['android_vr', 'android', 'web', 'tvhtml5']
+            'player_client': ['android_vr', 'android', 'web', 'tvhtml5', 'mweb', 'ios']
         }
     }
 }
@@ -283,8 +284,10 @@ class Song:
             logger.info(f"YouTube bloqueó la extracción directa para la URL '{cleaned_query}'. Obteniendo título del video vía oEmbed...")
             yt_title = await resolve_youtube_oembed_title(cleaned_query)
             if yt_title:
-                clean_title = sanitize_query(yt_title)
-                logger.info(f"Título resuelto vía oEmbed: '{yt_title}'. Buscando pista alternativa en SoundCloud...")
+                # Limpiar etiquetas ruidosas (ej. | COVER ESPAÑOL |, [Official MV], etc.) para buscar la canción limpia en SoundCloud
+                clean_term = re.sub(r'(?i)(\||\bcover\b|\bespañol\b|\bspanish\b|\bofficial\b|\bvideo\b|\bmv\b|\bhd\b|\b320kbps\b|\[.*?\]|\(.*?\))', ' ', yt_title)
+                clean_title = sanitize_query(' '.join(clean_term.split())) or sanitize_query(yt_title)
+                logger.info(f"Título resuelto vía oEmbed: '{yt_title}' -> Búsqueda SoundCloud: '{clean_title}'")
                 sc_fallback_target = f"scsearch5:{clean_title}"
                 try:
                     sc_data = await loop.run_in_executor(None, extract_sc_entry, sc_fallback_target)
