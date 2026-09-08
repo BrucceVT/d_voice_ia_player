@@ -191,31 +191,10 @@ class Song:
                 target_search_term = itunes_meta["title"]
                 logger.info(f"iTunes resolvió el tema oficial: '{target_search_term}'")
 
-        # 2. Extracción de stream completo vía SoundCloud (100% libre de bloqueos de IP en la nube)
-        if not is_url:
-            sc_target = f"scsearch5:{target_search_term}"
-            try:
-                sc_data = await loop.run_in_executor(None, extract_sc_entry, sc_target)
-                if sc_data and sc_data.get("direct_stream_url"):
-                    title = sc_data.get("title", target_search_term)
-                    webpage_url = sc_data.get("webpage_url") or query
-                    stream_url = sc_data.get("direct_stream_url")
-                    duration = int(sc_data.get("duration", 0))
-                    logger.info(f"Extracción COMPLETA exitosa vía SoundCloud para '{title}' ({duration}s)")
-                    return cls(
-                        title=title,
-                        webpage_url=webpage_url,
-                        stream_url=stream_url,
-                        duration=duration,
-                        requester=requester
-                    )
-            except Exception as sc_err:
-                logger.warning(f"Extracción SoundCloud falló para '{target_search_term}': {sc_err}")
-
-        # 3. Extracción de stream completo vía YouTube yt-dlp
+        # 2. Extracción de stream completo de audio vía YouTube (yt-dlp)
         search_target = target_search_term if is_url else f"ytsearch1:{target_search_term}"
 
-        def _extract():
+        def _extract_yt():
             def _resolve_entry(extractor_instance, target):
                 logger.info(f"Extrayendo stream de audio completo con yt-dlp para: {target}")
                 info = extractor_instance.extract_info(target, download=False)
@@ -263,9 +242,9 @@ class Song:
 
         data = None
         try:
-            data = await loop.run_in_executor(None, _extract)
+            data = await loop.run_in_executor(None, _extract_yt)
         except Exception as yt_err:
-            logger.warning(f"yt-dlp falló para '{target_search_term}': {yt_err}")
+            logger.warning(f"yt-dlp YouTube falló para '{target_search_term}': {yt_err}")
 
         if data and data.get("direct_stream_url"):
             title = data.get("title", "Canción Desconocida")
@@ -281,6 +260,27 @@ class Song:
                     duration=duration,
                     requester=requester
                 )
+
+        # 3. Extracción de stream completo vía SoundCloud (Fallback si YouTube fallara)
+        if not is_url:
+            sc_target = f"scsearch5:{target_search_term}"
+            try:
+                sc_data = await loop.run_in_executor(None, extract_sc_entry, sc_target)
+                if sc_data and sc_data.get("direct_stream_url"):
+                    title = sc_data.get("title", target_search_term)
+                    webpage_url = sc_data.get("webpage_url") or query
+                    stream_url = sc_data.get("direct_stream_url")
+                    duration = int(sc_data.get("duration", 0))
+                    logger.info(f"Extracción COMPLETA exitosa vía SoundCloud para '{title}' ({duration}s)")
+                    return cls(
+                        title=title,
+                        webpage_url=webpage_url,
+                        stream_url=stream_url,
+                        duration=duration,
+                        requester=requester
+                    )
+            except Exception as sc_err:
+                logger.warning(f"Extracción SoundCloud falló para '{target_search_term}': {sc_err}")
 
         # 4. Fallback de resolución inteligente para URLs de YouTube cuando la IP del servidor es bloqueada ("Sign in to confirm you're not a bot")
         if is_url and any(domain in cleaned_query for domain in ("youtube.com", "youtu.be")):
