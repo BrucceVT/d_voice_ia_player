@@ -59,11 +59,36 @@ class Song:
         search_target = query if query.startswith(("http://", "https://")) else f"ytsearch:{query}"
 
         def _extract():
-            try:
-                data = ytdl.extract_info(search_target, download=False)
+            def _resolve_entry(extractor_instance, target):
+                data = extractor_instance.extract_info(target, download=False)
                 if 'entries' in data and data['entries']:
-                    return data['entries'][0]
-                return data
+                    entry = data['entries'][0]
+                else:
+                    entry = data
+
+                # Si es un resultado de búsqueda, resolver la información completa del video para obtener streams
+                url = entry.get('url', '')
+                if not url or not url.startswith(('http://', 'https://')) or 'youtube.com' in url or 'youtu.be' in url:
+                    vid_url = entry.get('webpage_url') or (f"https://www.youtube.com/watch?v={entry.get('id')}" if entry.get('id') else None)
+                    if vid_url:
+                        entry = extractor_instance.extract_info(vid_url, download=False)
+
+                # Obtener la URL del stream de audio directo (desde 'url' o lista de 'formats')
+                stream_url = entry.get('url')
+                if not stream_url or not stream_url.startswith(('http://', 'https://')):
+                    formats = entry.get('formats', [])
+                    audio_formats = [f for f in formats if f.get('vcodec') == 'none' and f.get('url')]
+                    if not audio_formats:
+                        audio_formats = [f for f in formats if f.get('url')]
+                    if audio_formats:
+                        audio_formats.sort(key=lambda f: f.get('abr') or f.get('tbr') or 0, reverse=True)
+                        stream_url = audio_formats[0]['url']
+
+                entry['direct_stream_url'] = stream_url
+                return entry
+
+            try:
+                return _resolve_entry(ytdl, search_target)
             except Exception as first_err:
                 logger.warning(f"Extracción primaria falló ({first_err}). Reintentando con cliente TVHTML5/iOS...")
                 fallback_opts = dict(YTDL_OPTIONS)
@@ -73,10 +98,7 @@ class Song:
                     }
                 }
                 with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
-                    data = ytdl_fallback.extract_info(search_target, download=False)
-                    if 'entries' in data and data['entries']:
-                        return data['entries'][0]
-                    return data
+                    return _resolve_entry(ytdl_fallback, search_target)
 
         data = await loop.run_in_executor(None, _extract)
 
@@ -84,11 +106,11 @@ class Song:
             raise ValueError(f"No se pudo encontrar ninguna canción con la consulta: {query}")
 
         title = data.get("title", "Canción Desconocida")
-        webpage_url = data.get("webpage_url", query)
-        stream_url = data.get("url", "")
+        webpage_url = data.get("webpage_url") or (f"https://www.youtube.com/watch?v={data.get('id')}" if data.get('id') else query)
+        stream_url = data.get("direct_stream_url") or data.get("url") or ""
         duration = int(data.get("duration", 0))
 
-        if not stream_url:
+        if not stream_url or not stream_url.startswith(('http://', 'https://')):
             raise ValueError("No se pudo obtener el stream de audio directo.")
 
         return cls(
