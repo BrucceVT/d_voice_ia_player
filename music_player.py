@@ -8,7 +8,7 @@ import yt_dlp
 
 logger = logging.getLogger("MusicAIBot.Player")
 
-# Opciones de yt-dlp optimizadas para extracción completa de audio sin descargas a disco
+# Opciones de yt-dlp optimizadas para extracción directa y rápida de streams de audio
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'extractaudio': True,
@@ -83,15 +83,9 @@ class Song:
                 if not entry:
                     raise ValueError("La búsqueda no devolvió ninguna entrada válida.")
 
-                # Forzar siempre la extracción de los metadatos completos del video
-                vid_url = entry.get('webpage_url') or (f"https://www.youtube.com/watch?v={entry.get('id')}" if entry.get('id') else None)
-                if vid_url:
-                    logger.info(f"Resolviendo metadatos completos desde video URL: {vid_url}")
-                    entry = extractor_instance.extract_info(vid_url, download=False)
-
+                # Intentar obtener la URL de stream directo de la raíz o desde la lista de formatos
                 stream_url = entry.get('url', '')
 
-                # Buscar en la lista de formatos de audio si la raíz es una página web o nula
                 if is_webpage_url(stream_url):
                     formats = entry.get('formats', [])
                     audio_formats = [
@@ -103,6 +97,24 @@ class Song:
                     if audio_formats:
                         audio_formats.sort(key=lambda f: f.get('abr') or f.get('tbr') or 0, reverse=True)
                         stream_url = audio_formats[0]['url']
+
+                # Si los formatos en memoria fallan, intentar la consulta secundaria al enlace de video como último recurso
+                if is_webpage_url(stream_url):
+                    vid_url = entry.get('webpage_url') or (f"https://www.youtube.com/watch?v={entry.get('id')}" if entry.get('id') else None)
+                    if vid_url:
+                        logger.info(f"Resolviendo metadatos secundarios desde video URL: {vid_url}")
+                        full_entry = extractor_instance.extract_info(vid_url, download=False)
+                        stream_url = full_entry.get('url', '')
+                        if is_webpage_url(stream_url):
+                            formats = full_entry.get('formats', [])
+                            audio_formats = [
+                                f for f in formats 
+                                if f.get('url') and not is_webpage_url(f['url']) and (f.get('acodec') != 'none' or f.get('vcodec') == 'none')
+                            ]
+                            if audio_formats:
+                                audio_formats.sort(key=lambda f: f.get('abr') or f.get('tbr') or 0, reverse=True)
+                                stream_url = audio_formats[0]['url']
+                        entry = full_entry
 
                 if is_webpage_url(stream_url):
                     raise ValueError(f"No se pudo resolver un stream directo de media para: {target}")
