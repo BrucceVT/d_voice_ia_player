@@ -90,15 +90,21 @@ class Song:
             try:
                 return _resolve_entry(ytdl, search_target)
             except Exception as first_err:
-                logger.warning(f"Extracción primaria falló ({first_err}). Reintentando con cliente TVHTML5/iOS...")
-                fallback_opts = dict(YTDL_OPTIONS)
-                fallback_opts['extractor_args'] = {
-                    'youtube': {
-                        'player_client': ['tvhtml5', 'ios', 'android_vr']
+                logger.warning(f"Extracción primaria de YouTube falló ({first_err}). Reintentando con cliente TVHTML5/iOS...")
+                try:
+                    fallback_opts = dict(YTDL_OPTIONS)
+                    fallback_opts['extractor_args'] = {
+                        'youtube': {
+                            'player_client': ['tvhtml5', 'ios', 'android_vr']
+                        }
                     }
-                }
-                with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
-                    return _resolve_entry(ytdl_fallback, search_target)
+                    with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
+                        return _resolve_entry(ytdl_fallback, search_target)
+                except Exception as second_err:
+                    logger.warning(f"YouTube bloqueó la búsqueda ({second_err}). Activando respaldo automático con SoundCloud (scsearch)...")
+                    sc_target = query if query.startswith(('http://', 'https://')) else f"scsearch:{query}"
+                    with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ytdl_sc:
+                        return _resolve_entry(ytdl_sc, sc_target)
 
         data = await loop.run_in_executor(None, _extract)
 
