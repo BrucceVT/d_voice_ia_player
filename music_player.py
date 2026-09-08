@@ -1,6 +1,6 @@
 import asyncio
 import logging
-import urllib.parse
+import unicodedata
 from dataclasses import dataclass
 from typing import Optional, List
 import discord
@@ -42,6 +42,15 @@ FFMPEG_OPTIONS = {
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 
 
+def sanitize_query(query: str) -> str:
+    """Normaliza texto eliminando acentos y tildes para evitar incompatibilidades en yt-dlp."""
+    if query.startswith(("http://", "https://")):
+        return query
+    normalized = unicodedata.normalize('NFKD', query)
+    ascii_str = ''.join([c for c in normalized if not unicodedata.combining(c)])
+    return ascii_str.strip()
+
+
 def is_webpage_url(url: str) -> bool:
     """Comprueba si una URL es una página web de video/playlist en lugar de un stream directo de media."""
     if not url or not isinstance(url, str) or not url.startswith(('http://', 'https://')):
@@ -65,7 +74,7 @@ class Song:
         """Busca o procesa la URL con yt-dlp de forma asíncrona usando executor thread pool."""
         loop = asyncio.get_running_loop()
         
-        cleaned_query = query.strip()
+        cleaned_query = sanitize_query(query)
         is_url = cleaned_query.startswith(("http://", "https://"))
         search_target = cleaned_query if is_url else f"ytsearch1:{cleaned_query}"
 
