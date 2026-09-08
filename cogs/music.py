@@ -98,7 +98,7 @@ class MusicCog(commands.Cog):
 
             song = await asyncio.wait_for(
                 Song.from_query(search_query, interaction.user.display_name),
-                timeout=45.0
+                timeout=60.0
             )
             await manager.add_to_queue(song)
 
