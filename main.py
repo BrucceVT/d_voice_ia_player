@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import sys
+import urllib.request
 import discord
 from discord.ext import commands
 
@@ -37,6 +38,32 @@ async def start_health_server() -> None:
     logger.info(f"Servidor HTTP de Health Check escuchando en 0.0.0.0:{port}")
 
 
+async def keep_alive_loop() -> None:
+    """Mantiene la instancia gratuita de Render activa enviando un ping de salud cada 8 minutos."""
+    await asyncio.sleep(15)
+    render_url = os.getenv("RENDER_EXTERNAL_URL")
+    if not render_url:
+        logger.info("RENDER_EXTERNAL_URL no detectada en variables de entorno; el auto-ping externo está omitido.")
+        return
+
+    logger.info(f"Auto-ping configurado para la URL de Render: {render_url}")
+    while True:
+        try:
+            await asyncio.sleep(480)  # 8 minutos (480 segundos)
+            logger.info(f"Enviando heartbeat de auto-ping a: {render_url}")
+            
+            def _ping():
+                req = urllib.request.Request(render_url, headers={"User-Agent": "RenderKeepAlive/1.0"})
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    return resp.status
+
+            loop = asyncio.get_running_loop()
+            status = await loop.run_in_executor(None, _ping)
+            logger.info(f"Heartbeat de auto-ping exitoso (Status: {status})")
+        except Exception as e:
+            logger.warning(f"Advertencia en heartbeat de auto-ping: {e}")
+
+
 class MusicBot(commands.Bot):
     """Bot de Discord principal con soporte para Slash Commands y Cogs asíncronos."""
 
@@ -58,8 +85,9 @@ class MusicBot(commands.Bot):
         logger.info("Cargando módulos y cogs...")
         await self.load_extension("cogs.music")
         
-        # Iniciar servidor de Health Check para Render
+        # Iniciar servidor HTTP de salud y bucle de auto-ping
         asyncio.create_task(start_health_server())
+        asyncio.create_task(keep_alive_loop())
 
     async def on_ready(self) -> None:
         """Callback ejecutado cuando el bot inicia sesión y está listo."""
