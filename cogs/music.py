@@ -42,12 +42,17 @@ class MusicCog(commands.Cog):
 
         manager = self.get_manager(guild.id)
 
-        if not manager.voice_client or not manager.voice_client.is_connected():
-            manager.voice_client = await voice_channel.connect()
-            logger.info(f"Bot conectado al canal de voz '{voice_channel.name}' en guild {guild.id}")
-        elif manager.voice_client.channel != voice_channel:
-            await manager.voice_client.move_to(voice_channel)
-            logger.info(f"Bot movido al canal de voz '{voice_channel.name}' en guild {guild.id}")
+        try:
+            if not manager.voice_client or not manager.voice_client.is_connected():
+                manager.voice_client = await voice_channel.connect(timeout=10.0, reconnect=True)
+                logger.info(f"Bot conectado al canal de voz '{voice_channel.name}' en guild {guild.id}")
+            elif manager.voice_client.channel != voice_channel:
+                await manager.voice_client.move_to(voice_channel)
+                logger.info(f"Bot movido al canal de voz '{voice_channel.name}' en guild {guild.id}")
+        except Exception as e:
+            logger.error(f"Error al conectar/mover al canal de voz: {e}", exc_info=True)
+            await interaction.followup.send(f"❌ No se pudo conectar al canal de voz `{voice_channel.name}`: `{e}`")
+            return None
 
         return manager.voice_client
 
@@ -56,32 +61,35 @@ class MusicCog(commands.Cog):
         description="Reproduce una canción vía URL, búsqueda o prompt descriptivo procesado por IA."
     )
     @app_commands.describe(
-        cancion_o_prompt="Enlace directos, título o descripción informal (ej: 'rock argentino melancólico')"
+        cancion_o_prompt="Enlace directo, título o descripción informal (ej: 'rock argentino melancólico')"
     )
     async def play(self, interaction: discord.Interaction, cancion_o_prompt: str):
         """Comando /play con soporte para Gemini AI e intenciones complejas."""
-        # Prevenir timeouts deferiendo la respuesta inmediatamente
-        await interaction.response.defer()
-
-        guild = interaction.guild
-        if not guild:
-            await interaction.followup.send("❌ Este comando debe ejecutarse en un servidor.")
-            return
-
-        voice_client = await self._ensure_voice_connection(interaction)
-        if not voice_client:
-            return
-
-        manager = self.get_manager(guild.id)
-        search_query = cancion_o_prompt.strip()
-
-        # Si el usuario no proporcionó una URL directa, consultar a Gemini para entender la intención
-        is_url = search_query.startswith(("http://", "https://"))
-        if not is_url:
-            ai_status_msg = await interaction.followup.send("🤖 *Analizando tu solicitud con Gemini AI...*", wait=True)
-            search_query = await self.gemini.interpret_search_prompt(cancion_o_prompt)
+        # Prevenir el timeout de 3 segundos de Discord respondiendo defer inmediatamente
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer()
+        except Exception as defer_err:
+            logger.warning(f"Error deferring response: {defer_err}")
 
         try:
+            guild = interaction.guild
+            if not guild:
+                await interaction.followup.send("❌ Este comando debe ejecutarse en un servidor.")
+                return
+
+            voice_client = await self._ensure_voice_connection(interaction)
+            if not voice_client:
+                return
+
+            manager = self.get_manager(guild.id)
+            search_query = cancion_o_prompt.strip()
+
+            # Si el usuario no proporcionó una URL directa, consultar a Gemini para entender la intención
+            is_url = search_query.startswith(("http://", "https://"))
+            if not is_url:
+                search_query = await self.gemini.interpret_search_prompt(cancion_o_prompt)
+
             song = await Song.from_query(search_query, interaction.user.display_name)
             await manager.add_to_queue(song)
 
@@ -97,17 +105,25 @@ class MusicCog(commands.Cog):
                 embed.add_field(name="Duración", value=f"{mins}:{secs:02d}", inline=True)
             
             if not is_url and search_query != cancion_o_prompt:
-                embed.set_footer(text=f"💡 Prompt original: '{cancion_o_prompt}' -> Gemini Búsqueda: '{search_query}'")
+                embed.set_footer(text=f"💡 Prompt original: '{cancion_o_prompt}' ➔ Búsqueda: '{search_query}'")
 
             await interaction.followup.send(embed=embed)
         except Exception as e:
-            logger.error(f"Error procesando comando /play para '{cancion_o_prompt}': {e}")
-            await interaction.followup.send(f"❌ Error al procesar la canción: `{str(e)}`")
+            logger.error(f"Error procesando comando /play para '{cancion_o_prompt}': {e}", exc_info=True)
+            try:
+                await interaction.followup.send(f"❌ Error al procesar la canción: `{str(e)}`")
+            except Exception:
+                pass
 
     @app_commands.command(name="skip", description="Salta la canción actualmente en reproducción.")
     async def skip(self, interaction: discord.Interaction):
         """Comando /skip para avanzar a la siguiente canción."""
-        await interaction.response.defer()
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer()
+        except Exception:
+            pass
+
         guild = interaction.guild
         if not guild:
             return
@@ -206,7 +222,11 @@ class MusicCog(commands.Cog):
     )
     async def recommend(self, interaction: discord.Interaction):
         """Comando /recommend asistido por la IA de Gemini."""
-        await interaction.response.defer()
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer()
+        except Exception:
+            pass
 
         guild = interaction.guild
         if not guild:
@@ -237,11 +257,11 @@ class MusicCog(commands.Cog):
                     value="\n".join([f"• {title}" for title in manager.history[-3:]]),
                     inline=False
                 )
-            embed.set_footer(text="¡Generado automáticamente con el modelo Gemini 2.5 Flash!")
+            embed.set_footer(text="¡Generado automáticamente con el modelo Gemini AI!")
 
             await interaction.followup.send(embed=embed)
         except Exception as e:
-            logger.error(f"Error procesando recomendación de Gemini: {e}")
+            logger.error(f"Error procesando recomendación de Gemini: {e}", exc_info=True)
             await interaction.followup.send(f"❌ No se pudo cargar la recomendación de la IA: `{str(e)}`")
 
     @commands.Cog.listener()
@@ -266,7 +286,6 @@ class MusicCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     """Función de registro del Cog para discord.py."""
-    # Instanciar servicio Gemini desde la configuración global
     from config import config
     gemini_service = GeminiService(api_key=config.gemini_api_key)
     await bot.add_cog(MusicCog(bot, gemini_service))
