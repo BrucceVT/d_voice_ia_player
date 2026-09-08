@@ -44,7 +44,8 @@ class MusicBot(commands.Bot):
         intents = discord.Intents.default()
         intents.guilds = True
         intents.voice_states = True
-        intents.message_content = True
+        # Slash Commands (app_commands) no requieren Privileged Intents
+        intents.message_content = False
 
         super().__init__(
             command_prefix="!",
