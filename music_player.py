@@ -55,26 +55,35 @@ class Song:
         """Busca o procesa la URL con yt-dlp de forma asíncrona usando executor thread pool."""
         loop = asyncio.get_running_loop()
         
-        # Si no es una URL directa, utilizar búsqueda de YouTube
-        search_target = query if query.startswith(("http://", "https://")) else f"ytsearch:{query}"
+        # Si no es una URL directa, utilizar búsqueda ytsearch1: para obtener 1 resultado
+        is_url = query.startswith(("http://", "https://"))
+        search_target = query if is_url else f"ytsearch1:{query}"
 
         def _extract():
             def _resolve_entry(extractor_instance, target):
+                logger.info(f"Extrayendo stream para: {target}")
                 data = extractor_instance.extract_info(target, download=False)
+                if not data:
+                    raise ValueError(f"No se obtuvieron datos de extracción para {target}")
+
                 if 'entries' in data and data['entries']:
                     entry = data['entries'][0]
                 else:
                     entry = data
 
-                # Si es un resultado de búsqueda, resolver la información completa del video para obtener streams
-                url = entry.get('url', '')
-                if not url or not url.startswith(('http://', 'https://')) or 'youtube.com' in url or 'youtu.be' in url:
+                if not entry:
+                    raise ValueError("La búsqueda no devolvió ninguna entrada válida.")
+
+                # Si la entrada es un resultado resumido, extraer la info completa de la página del video
+                stream_url = entry.get('url', '')
+                if not stream_url or not stream_url.startswith(('http://', 'https://')) or 'youtube.com' in stream_url or 'youtu.be' in stream_url:
                     vid_url = entry.get('webpage_url') or (f"https://www.youtube.com/watch?v={entry.get('id')}" if entry.get('id') else None)
                     if vid_url:
+                        logger.info(f"Resolviendo stream directo desde URL de video: {vid_url}")
                         entry = extractor_instance.extract_info(vid_url, download=False)
+                        stream_url = entry.get('url', '')
 
-                # Obtener la URL del stream de audio directo (desde 'url' o lista de 'formats')
-                stream_url = entry.get('url')
+                # Si aún no hay stream directo en 'url', buscar en la lista de 'formats'
                 if not stream_url or not stream_url.startswith(('http://', 'https://')):
                     formats = entry.get('formats', [])
                     audio_formats = [f for f in formats if f.get('vcodec') == 'none' and f.get('url')]
@@ -85,6 +94,7 @@ class Song:
                         stream_url = audio_formats[0]['url']
 
                 entry['direct_stream_url'] = stream_url
+                logger.info(f"Stream directo obtenido exitosamente para '{entry.get('title')}': {str(stream_url)[:40]}...")
                 return entry
 
             try:
@@ -101,8 +111,8 @@ class Song:
                     with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
                         return _resolve_entry(ytdl_fallback, search_target)
                 except Exception as second_err:
-                    logger.warning(f"YouTube bloqueó la búsqueda ({second_err}). Activando respaldo automático con SoundCloud (scsearch)...")
-                    sc_target = query if query.startswith(('http://', 'https://')) else f"scsearch:{query}"
+                    sc_target = query if is_url else f"scsearch1:{query}"
+                    logger.warning(f"YouTube bloqueó la búsqueda ({second_err}). Activando respaldo con SoundCloud ({sc_target})...")
                     with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ytdl_sc:
                         return _resolve_entry(ytdl_sc, sc_target)
 
