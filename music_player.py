@@ -32,10 +32,10 @@ YTDL_OPTIONS = {
     }
 }
 
-# Opciones de FFmpeg para reconexión activa de streams y remoción automática de silencios iniciales
+# Opciones de FFmpeg para reconexión activa de streams y remoción sutil de silencio únicamente al inicio del track
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-vn -filter:a "silenceremove=start_periods=1:start_duration=0.5:start_threshold=-45dB"',
+    'options': '-vn -filter:a "silenceremove=start_periods=1:start_duration=0.1:start_threshold=-60dB"',
 }
 
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
@@ -152,7 +152,7 @@ class Song:
 
         # 2. Extracción de stream completo vía SoundCloud (100% libre de bloqueos de IP en la nube)
         if not is_url:
-            sc_target = f"scsearch1:{target_search_term}"
+            sc_target = f"scsearch5:{target_search_term}"
             try:
                 def _extract_sc():
                     logger.info(f"Buscando canción COMPLETA en SoundCloud para: {sc_target}")
@@ -160,11 +160,13 @@ class Song:
                     with yt_dlp.YoutubeDL(opts) as ytdl_sc:
                         info = ytdl_sc.extract_info(sc_target, download=False)
                         if info and 'entries' in info and info['entries']:
-                            entry = info['entries'][0]
-                            stream_url = get_direct_stream_from_info(entry) or entry.get('url')
+                            # Filtrar vistas previas de 30s (típicas de canales oficiales) y seleccionar la primera pista completa (> 45s)
+                            full_tracks = [e for e in info['entries'] if e and e.get('duration', 0) > 45]
+                            selected_entry = full_tracks[0] if full_tracks else info['entries'][0]
+                            stream_url = get_direct_stream_from_info(selected_entry) or selected_entry.get('url')
                             if stream_url and not is_webpage_url(stream_url):
-                                entry['direct_stream_url'] = stream_url
-                                return entry
+                                selected_entry['direct_stream_url'] = stream_url
+                                return selected_entry
                     return None
 
                 sc_data = await loop.run_in_executor(None, _extract_sc)
