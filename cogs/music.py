@@ -65,18 +65,20 @@ class MusicCog(commands.Cog):
     )
     async def play(self, interaction: discord.Interaction, cancion_o_prompt: str):
         """Comando /play con soporte para Gemini AI e intenciones complejas."""
-        # Prevenir el timeout de 3 segundos de Discord respondiendo defer inmediatamente
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer()
         except Exception as defer_err:
             logger.warning(f"Error deferring response: {defer_err}")
 
+        status_msg = None
         try:
             guild = interaction.guild
             if not guild:
                 await interaction.followup.send("❌ Este comando debe ejecutarse en un servidor.")
                 return
+
+            status_msg = await interaction.followup.send("🔊 *Conectando al canal de voz...*", wait=True)
 
             voice_client = await self._ensure_voice_connection(interaction)
             if not voice_client:
@@ -88,9 +90,15 @@ class MusicCog(commands.Cog):
             # Si el usuario no proporcionó una URL directa, consultar a Gemini para entender la intención
             is_url = search_query.startswith(("http://", "https://"))
             if not is_url:
+                await status_msg.edit(content="🤖 *Analizando tu solicitud con Gemini AI...*")
                 search_query = await self.gemini.interpret_search_prompt(cancion_o_prompt)
 
-            song = await Song.from_query(search_query, interaction.user.display_name)
+            await status_msg.edit(content=f"🔎 *Buscando audio para: `{search_query}`...*")
+
+            song = await asyncio.wait_for(
+                Song.from_query(search_query, interaction.user.display_name),
+                timeout=25.0
+            )
             await manager.add_to_queue(song)
 
             embed = discord.Embed(
@@ -107,13 +115,21 @@ class MusicCog(commands.Cog):
             if not is_url and search_query != cancion_o_prompt:
                 embed.set_footer(text=f"💡 Prompt original: '{cancion_o_prompt}' ➔ Búsqueda: '{search_query}'")
 
-            await interaction.followup.send(embed=embed)
+            await status_msg.edit(content=None, embed=embed)
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout al procesar comando /play para '{cancion_o_prompt}'")
+            if status_msg:
+                try:
+                    await status_msg.edit(content="⏱️ La búsqueda tardó demasiado tiempo. Por favor intenta con el nombre directo de la canción.")
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"Error procesando comando /play para '{cancion_o_prompt}': {e}", exc_info=True)
-            try:
-                await interaction.followup.send(f"❌ Error al procesar la canción: `{str(e)}`")
-            except Exception:
-                pass
+            if status_msg:
+                try:
+                    await status_msg.edit(content=f"❌ Error al procesar la canción: `{str(e)}`")
+                except Exception:
+                    pass
 
     @app_commands.command(name="skip", description="Salta la canción actualmente en reproducción.")
     async def skip(self, interaction: discord.Interaction):

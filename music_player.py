@@ -21,6 +21,7 @@ YTDL_OPTIONS = {
     'quiet': True,
     'no_warnings': True,
     'source_address': '0.0.0.0',
+    'socket_timeout': 10,
     'extractor_args': {
         'youtube': {
             'player_client': ['android', 'ios', 'mweb', 'web']
