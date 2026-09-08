@@ -24,16 +24,11 @@ YTDL_OPTIONS = {
     'logtostderr': False,
     'quiet': True,
     'no_warnings': True,
-    'socket_timeout': 8,
-    'youtube_include_dash_manifest': False,
-    'youtube_include_hls_manifest': False,
+    'socket_timeout': 10,
     'extractor_args': {
         'youtube': {
-            'player_client': ['mweb', 'ios', 'android']
+            'player_client': ['android', 'ios', 'mweb']
         }
-    },
-    'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
     }
 }
 
@@ -70,95 +65,8 @@ def is_webpage_url(url: str) -> bool:
     return False
 
 
-async def resolve_via_invidious_api(query: str) -> Optional[dict]:
-    """Resuelve la búsqueda y la URL directa de audio utilizando instancias públicas de Invidious/Piped."""
-    cleaned_q = sanitize_query(query)
-    is_url = cleaned_q.startswith(("http://", "https://"))
-
-    video_id = None
-    if is_url:
-        if 'v=' in cleaned_q:
-            video_id = cleaned_q.split('v=')[1].split('&')[0]
-        elif 'youtu.be/' in cleaned_q:
-            video_id = cleaned_q.split('youtu.be/')[1].split('?')[0]
-
-    invidious_instances = [
-        "https://invidious.flokinet.to",
-        "https://inv.hostux.net",
-        "https://invidious.drgns.space",
-        "https://invidious.nerdvpn.de",
-        "https://yewtu.be",
-        "https://invidious.privacyredirect.com"
-    ]
-
-    loop = asyncio.get_running_loop()
-
-    # Paso 1: Si no tenemos video_id, buscar en la API de Invidious
-    if not video_id:
-        encoded_q = urllib.parse.quote(cleaned_q)
-        for base_url in invidious_instances:
-            try:
-                search_url = f"{base_url}/api/v1/search?q={encoded_q}&type=video"
-                req = urllib.request.Request(search_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-                
-                def _do_search(s_url=search_url, request_obj=req):
-                    with urllib.request.urlopen(request_obj, timeout=2.5, context=ssl_ctx) as resp:
-                        return json.loads(resp.read().decode('utf-8'))
-
-                results = await loop.run_in_executor(None, _do_search)
-                if isinstance(results, list) and len(results) > 0:
-                    first = results[0]
-                    video_id = first.get("videoId")
-                    if video_id:
-                        title = first.get("title", cleaned_q)
-                        logger.info(f"Invidious Search ({base_url}) encontró video ID '{video_id}' para '{cleaned_q}'")
-                        break
-            except Exception as e:
-                logger.debug(f"Search API {base_url} falló: {e}")
-
-    if not video_id:
-        return None
-
-    # Paso 2: Obtener las URLs de audio directo desde la API de detalles de video de Invidious
-    for base_url in invidious_instances:
-        try:
-            details_url = f"{base_url}/api/v1/videos/{video_id}"
-            req = urllib.request.Request(details_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-
-            def _do_details(d_url=details_url, request_obj=req):
-                with urllib.request.urlopen(request_obj, timeout=2.5, context=ssl_ctx) as resp:
-                    return json.loads(resp.read().decode('utf-8'))
-
-            details = await loop.run_in_executor(None, _do_details)
-            title = details.get("title", "Canción Desconocida")
-            duration = int(details.get("lengthSeconds", 0))
-            webpage_url = f"https://www.youtube.com/watch?v={video_id}"
-
-            adaptive_formats = details.get("adaptiveFormats", [])
-            audio_streams = [
-                f for f in adaptive_formats 
-                if f.get("type", "").startswith("audio/") and f.get("url")
-            ]
-
-            if audio_streams:
-                # Ordenar por bitrate (bitrate o max (container))
-                audio_streams.sort(key=lambda f: int(f.get("bitrate", 0)), reverse=True)
-                direct_audio_url = audio_streams[0]["url"]
-                logger.info(f"Invidious Video API ({base_url}) obtuvo stream directo de audio para '{title}'")
-                return {
-                    "title": title,
-                    "webpage_url": webpage_url,
-                    "stream_url": direct_audio_url,
-                    "duration": duration
-                }
-        except Exception as e:
-            logger.debug(f"Details API {base_url} falló: {e}")
-
-    return None
-
-
 async def resolve_via_itunes_api(query: str) -> Optional[dict]:
-    """Resuelve metadatos oficiales a través de iTunes Search API."""
+    """Resuelve metadatos y título oficial de la canción a través de iTunes Search API."""
     cleaned_q = sanitize_query(query)
     if cleaned_q.startswith(("http://", "https://")):
         return None
@@ -228,77 +136,75 @@ class Song:
 
     @classmethod
     async def from_query(cls, query: str, requester: str) -> "Song":
-        """Busca o procesa la URL con yt-dlp de forma asíncrona usando executor thread pool."""
+        """Busca o procesa la URL de forma asíncrona resolviendo el título exacto y el stream completo."""
         loop = asyncio.get_running_loop()
         cleaned_query = sanitize_query(query)
 
-        # 1. Intentar obtener el stream completo a través de la API pública de Invidious
-        invidious_data = await resolve_via_invidious_api(cleaned_query)
-        if invidious_data and invidious_data.get("stream_url"):
-            logger.info(f"Extracción exitosa mediante Invidious API para '{invidious_data['title']}' ({invidious_data['duration']}s)")
-            return cls(
-                title=invidious_data["title"],
-                webpage_url=invidious_data["webpage_url"],
-                stream_url=invidious_data["stream_url"],
-                duration=invidious_data["duration"],
-                requester=requester
-            )
-
-        # 2. Intentar yt-dlp con YouTube
+        # 1. Si la consulta no es una URL y parece ambigua o corta (ej: "Soda" o un prompt largo), resolver el título oficial con iTunes
         is_url = cleaned_query.startswith(("http://", "https://"))
-        search_target = cleaned_query if is_url else f"ytsearch1:{cleaned_query}"
+        target_search_term = cleaned_query
+
+        if not is_url and ("-" not in cleaned_query or len(cleaned_query.split()) < 2):
+            logger.info(f"Búsqueda ambigua '{cleaned_query}'. Resolviendo título oficial con iTunes...")
+            itunes_meta = await resolve_via_itunes_api(cleaned_query)
+            if itunes_meta and itunes_meta.get("title"):
+                target_search_term = itunes_meta["title"]
+                logger.info(f"iTunes resolvió el tema oficial: '{target_search_term}'")
+
+        # 2. Extracción de stream completo vía yt-dlp (YouTube Search)
+        search_target = target_search_term if is_url else f"ytsearch1:{target_search_term}"
+
+        def _extract():
+            def _resolve_entry(extractor_instance, target):
+                logger.info(f"Extrayendo stream de audio completo con yt-dlp para: {target}")
+                info = extractor_instance.extract_info(target, download=False)
+                if not info:
+                    raise ValueError(f"No se obtuvieron datos de extracción para {target}")
+
+                if 'entries' in info and info['entries']:
+                    entry = info['entries'][0]
+                else:
+                    entry = info
+
+                if not entry:
+                    raise ValueError("La búsqueda no devolvió ninguna entrada válida.")
+
+                stream_url = get_direct_stream_from_info(entry)
+
+                if not stream_url:
+                    vid_url = entry.get('webpage_url') or (f"https://www.youtube.com/watch?v={entry.get('id')}" if entry.get('id') else None)
+                    if vid_url:
+                        logger.info(f"Resolviendo metadatos completos desde video URL: {vid_url}")
+                        full_entry = extractor_instance.extract_info(vid_url, download=False)
+                        stream_url = get_direct_stream_from_info(full_entry)
+                        if stream_url:
+                            entry = full_entry
+
+                if not stream_url:
+                    raise ValueError(f"No se pudo resolver un stream directo de media para: {target}")
+
+                entry['direct_stream_url'] = stream_url
+                logger.info(f"Stream de audio completo ({entry.get('duration')}s) obtenido para '{entry.get('title')}': {str(stream_url)[:50]}...")
+                return entry
+
+            try:
+                return _resolve_entry(ytdl, search_target)
+            except Exception as first_err:
+                logger.warning(f"Búsqueda primaria YouTube falló ({first_err}). Reintentando con cliente TVHTML5...")
+                fallback_opts = dict(YTDL_OPTIONS)
+                fallback_opts['extractor_args'] = {
+                    'youtube': {
+                        'player_client': ['tvhtml5', 'web']
+                    }
+                }
+                with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
+                    return _resolve_entry(ytdl_fallback, search_target)
 
         data = None
         try:
-            def _extract():
-                def _resolve_entry(extractor_instance, target):
-                    logger.info(f"Extrayendo stream con yt-dlp para: {target}")
-                    info = extractor_instance.extract_info(target, download=False)
-                    if not info:
-                        raise ValueError(f"No se obtuvieron datos de extracción para {target}")
-
-                    if 'entries' in info and info['entries']:
-                        entry = info['entries'][0]
-                    else:
-                        entry = info
-
-                    if not entry:
-                        raise ValueError("La búsqueda no devolvió ninguna entrada válida.")
-
-                    stream_url = get_direct_stream_from_info(entry)
-
-                    if not stream_url:
-                        vid_url = entry.get('webpage_url') or (f"https://www.youtube.com/watch?v={entry.get('id')}" if entry.get('id') else None)
-                        if vid_url:
-                            logger.info(f"Resolviendo metadatos completos desde video URL: {vid_url}")
-                            full_entry = extractor_instance.extract_info(vid_url, download=False)
-                            stream_url = get_direct_stream_from_info(full_entry)
-                            if stream_url:
-                                entry = full_entry
-
-                    if not stream_url:
-                        raise ValueError(f"No se pudo resolver un stream directo de media para: {target}")
-
-                    entry['direct_stream_url'] = stream_url
-                    logger.info(f"Stream directo obtenido exitosamente para '{entry.get('title')}': {str(stream_url)[:50]}...")
-                    return entry
-
-                try:
-                    return _resolve_entry(ytdl, search_target)
-                except Exception as first_err:
-                    logger.warning(f"Búsqueda primaria YouTube falló ({first_err}). Reintentando con cliente TVHTML5...")
-                    fallback_opts = dict(YTDL_OPTIONS)
-                    fallback_opts['extractor_args'] = {
-                        'youtube': {
-                            'player_client': ['tvhtml5', 'web']
-                        }
-                    }
-                    with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
-                        return _resolve_entry(ytdl_fallback, search_target)
-
             data = await loop.run_in_executor(None, _extract)
         except Exception as yt_err:
-            logger.warning(f"yt-dlp falló para '{cleaned_query}': {yt_err}")
+            logger.warning(f"yt-dlp falló para '{target_search_term}': {yt_err}")
 
         if data and data.get("direct_stream_url"):
             title = data.get("title", "Canción Desconocida")
@@ -315,35 +221,17 @@ class Song:
                     requester=requester
                 )
 
-        # 3. Tier 3: Resolver título oficial con iTunes y reintentar resolución de stream completo
-        logger.info(f"Iniciando Tier 3 iTunes Search API fallback para resolver título exacto de: '{cleaned_query}'")
-        itunes_data = await resolve_via_itunes_api(cleaned_query)
-        if itunes_data:
-            official_title = itunes_data["title"]
-            logger.info(f"iTunes identificó el título oficial: '{official_title}'. Reintentando extracción de stream completo...")
-            
-            # Reintentar Invidious con el título exacto resuelto por iTunes
-            full_invidious = await resolve_via_invidious_api(official_title)
-            if full_invidious and full_invidious.get("stream_url"):
-                logger.info(f"Extracción exitosa de canción COMPLETA mediante Invidious para '{official_title}' ({full_invidious['duration']}s)")
-                return cls(
-                    title=full_invidious["title"],
-                    webpage_url=full_invidious["webpage_url"],
-                    stream_url=full_invidious["stream_url"],
-                    duration=full_invidious["duration"],
-                    requester=requester
-                )
-
-            # Si el stream completo no pudo obtenerse, usar preview de iTunes como último recurso
-            if itunes_data.get("stream_url"):
-                logger.warning(f"Utilizando vista previa de iTunes para '{official_title}' como último recurso")
-                return cls(
-                    title=official_title,
-                    webpage_url=itunes_data["webpage_url"],
-                    stream_url=itunes_data["stream_url"],
-                    duration=itunes_data["duration"],
-                    requester=requester
-                )
+        # 3. Fallback de emergencia a vista previa de iTunes si la extracción de YouTube fallara por completo
+        logger.warning(f"Iniciando vista previa de iTunes como último recurso para: '{target_search_term}'")
+        itunes_fallback = await resolve_via_itunes_api(target_search_term)
+        if itunes_fallback and itunes_fallback.get("stream_url"):
+            return cls(
+                title=itunes_fallback["title"],
+                webpage_url=itunes_fallback["webpage_url"],
+                stream_url=itunes_fallback["stream_url"],
+                duration=itunes_fallback["duration"],
+                requester=requester
+            )
 
         raise ValueError(f"No se pudo resolver el stream de audio para: '{query}'")
 
