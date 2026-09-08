@@ -16,6 +16,7 @@ WORKDIR /app
 # Instalación de dependencias del sistema requeridas por FFmpeg y PyNaCl/discord.py
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    nodejs \
     ca-certificates \
     libffi-dev \
     build-essential \
