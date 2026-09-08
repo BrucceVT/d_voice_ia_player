@@ -21,11 +21,11 @@ class GeminiService:
     async def interpret_search_prompt(self, user_prompt: str) -> str:
         """Interpreta una solicitud o descripción informal y devuelve un término de búsqueda preciso."""
         system_instruction = (
-            "Eres un experto DJ musical con profundo conocimiento universal de canciones. "
-            "Tu tarea es recibir una descripción informal, estado de ánimo o género entregado por un usuario "
-            "y responder ÚNICAMENTE con el término de búsqueda ideal en formato '[Nombre de Canción] [Nombre de Artista]'. "
-            "No incluyas introducciones, ni comentarios, ni comillas, ni explicaciones adicionales. "
-            "Si la entrada ya parece un título exacto o enlace, devuélvela limpia."
+            "Eres un DJ experto en música universal. Tu tarea es recibir una descripción informal, estado de ánimo o género "
+            "y responder ÚNICAMENTE con el título exacto de UNA canción concreta y su artista en formato 'Artista - Canción'. "
+            "Ejemplo: Si recibes 'rock argentino melancólico', responde 'Soda Stereo - Té Para Tres'. "
+            "Jamás respondas con géneros, prefijos como 'Topic:', viñetas, explicaciones ni comillas. "
+            "Responde únicamente con el nombre del artista y la canción."
         )
 
         prompt = f"Solicitud del usuario: '{user_prompt}'"
@@ -46,8 +46,12 @@ class GeminiService:
 
                     if response and response.text:
                         result = response.text.strip().replace('"', '').replace("'", "")
-                        logger.info(f"Gemini ({model_name}) interpretó exitosamente '{user_prompt}' -> '{result}'")
-                        return result
+                        # Limpiar prefijos no deseados si Gemini llegase a incluir 'Topic:'
+                        if result.lower().startswith("topic:"):
+                            result = result[6:].strip()
+                        if result:
+                            logger.info(f"Gemini ({model_name}) interpretó exitosamente '{user_prompt}' -> '{result}'")
+                            return result
                 except Exception as e:
                     logger.warning(f"Error con modelo Gemini {model_name}: {e}")
             
@@ -67,7 +71,7 @@ class GeminiService:
         system_instruction = (
             "Eres un DJ inteligente de radio. Analiza las últimas canciones reproducidas en la sesión "
             "y recomienda la SIGUIENTE canción que mantenga la coherencia temática, energía o género. "
-            "Responde ÚNICAMENTE con el término de búsqueda en formato '[Nombre de Canción] [Nombre de Artista]'. "
+            "Responde ÚNICAMENTE con el término de búsqueda en formato 'Artista - Canción'. "
             "No incluyas explicaciones, saluación, viñetas ni comillas."
         )
 
@@ -91,8 +95,11 @@ class GeminiService:
 
                     if response and response.text:
                         recommendation = response.text.strip().replace('"', '').replace("'", "")
-                        logger.info(f"Gemini ({model_name}) generó recomendación -> '{recommendation}'")
-                        return recommendation
+                        if recommendation.lower().startswith("topic:"):
+                            recommendation = recommendation[6:].strip()
+                        if recommendation:
+                            logger.info(f"Gemini ({model_name}) generó recomendación -> '{recommendation}'")
+                            return recommendation
                 except Exception as e:
                     logger.warning(f"Error con modelo Gemini {model_name} en recommend: {e}")
             
