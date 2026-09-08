@@ -47,13 +47,13 @@ class GeminiService:
     async def interpret_search_prompt(self, user_prompt: str) -> str:
         """Interpreta una solicitud o descripción informal y devuelve un término de búsqueda preciso."""
         system_instruction = (
-            "Eres un DJ experto en música universal. Tu tarea es recibir una descripción informal, estado de ánimo o género "
-            "y responder ÚNICAMENTE con el título exacto de UNA canción concreta y su artista en formato 'Artista - Canción'. "
-            "Ejemplo: Si recibes 'rock argentino melancólico', responde 'Soda Stereo - Té Para Tres'. "
-            "OBLIGATORIO: Incluye SIEMPRE el título COMPLETO de la canción después del artista. "
-            "Jamás dejes la respuesta terminada en un guion '-' ni inconclusa. "
-            "Jamás respondas con géneros, prefijos como 'Topic:', viñetas, explicaciones ni comillas. "
-            "Responde únicamente con el nombre del artista y el título completo de la canción."
+            "Eres un DJ experto en música universal. Tu función es interpretar la solicitud o descripción informal del usuario "
+            "y responder ÚNICAMENTE con el nombre del artista y el título exacto de la canción en formato 'Artista - Canción'. "
+            "Ejemplo 1: Si recibes 'cancion run rabbit', responde 'Eminem - Rabbit Run'. "
+            "Ejemplo 2: Si recibes 'rock argentino melancolico', responde 'Soda Stereo - Té Para Tres'. "
+            "OBLIGATORIO: Debes incluir SIEMPRE tanto el Artista COMO el nombre exacto de la Canción en el formato 'Artista - Canción'. "
+            "Jamás respondas con nombres de álbumes, bandas sonoras solas ('From 8'), géneros ni comillas. "
+            "Responde únicamente con 'Artista - Canción'."
         )
 
         prompt = f"Solicitud del usuario: '{user_prompt}'"
@@ -67,7 +67,7 @@ class GeminiService:
                         contents=prompt,
                         config=types.GenerateContentConfig(
                             system_instruction=system_instruction,
-                            temperature=0.3,
+                            temperature=0.2,
                             max_output_tokens=100,
                         )
                     )

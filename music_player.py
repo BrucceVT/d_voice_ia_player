@@ -139,11 +139,10 @@ class Song:
         """Busca o procesa la URL de forma asíncrona resolviendo el título exacto y el stream completo."""
         loop = asyncio.get_running_loop()
         cleaned_query = sanitize_query(query)
-
-        # 1. Si la consulta no es una URL y parece ambigua o corta (ej: "Soda" o un prompt largo), resolver el título oficial con iTunes
         is_url = cleaned_query.startswith(("http://", "https://"))
         target_search_term = cleaned_query
 
+        # 1. Si la consulta no es una URL y parece ambigua o corta, resolver el título oficial con iTunes
         if not is_url and ("-" not in cleaned_query or len(cleaned_query.split()) < 2):
             logger.info(f"Búsqueda ambigua '{cleaned_query}'. Resolviendo título oficial con iTunes...")
             itunes_meta = await resolve_via_itunes_api(cleaned_query)
@@ -151,7 +150,41 @@ class Song:
                 target_search_term = itunes_meta["title"]
                 logger.info(f"iTunes resolvió el tema oficial: '{target_search_term}'")
 
-        # 2. Extracción de stream completo vía yt-dlp (YouTube Search)
+        # 2. Extracción de stream completo vía SoundCloud (100% libre de bloqueos de IP en la nube)
+        if not is_url:
+            sc_target = f"scsearch1:{target_search_term}"
+            try:
+                def _extract_sc():
+                    logger.info(f"Buscando canción COMPLETA en SoundCloud para: {sc_target}")
+                    opts = dict(YTDL_OPTIONS)
+                    with yt_dlp.YoutubeDL(opts) as ytdl_sc:
+                        info = ytdl_sc.extract_info(sc_target, download=False)
+                        if info and 'entries' in info and info['entries']:
+                            entry = info['entries'][0]
+                            stream_url = get_direct_stream_from_info(entry) or entry.get('url')
+                            if stream_url and not is_webpage_url(stream_url):
+                                entry['direct_stream_url'] = stream_url
+                                return entry
+                    return None
+
+                sc_data = await loop.run_in_executor(None, _extract_sc)
+                if sc_data and sc_data.get("direct_stream_url"):
+                    title = sc_data.get("title", target_search_term)
+                    webpage_url = sc_data.get("webpage_url") or query
+                    stream_url = sc_data.get("direct_stream_url")
+                    duration = int(sc_data.get("duration", 0))
+                    logger.info(f"Extracción COMPLETA exitosa vía SoundCloud para '{title}' ({duration}s)")
+                    return cls(
+                        title=title,
+                        webpage_url=webpage_url,
+                        stream_url=stream_url,
+                        duration=duration,
+                        requester=requester
+                    )
+            except Exception as sc_err:
+                logger.warning(f"Extracción SoundCloud falló para '{target_search_term}': {sc_err}")
+
+        # 3. Extracción de stream completo vía YouTube yt-dlp
         search_target = target_search_term if is_url else f"ytsearch1:{target_search_term}"
 
         def _extract():
@@ -221,7 +254,7 @@ class Song:
                     requester=requester
                 )
 
-        # 3. Fallback de emergencia a vista previa de iTunes si la extracción de YouTube fallara por completo
+        # 4. Fallback de emergencia a vista previa de iTunes si la extracción de YouTube y SoundCloud fallaran por completo
         logger.warning(f"Iniciando vista previa de iTunes como último recurso para: '{target_search_term}'")
         itunes_fallback = await resolve_via_itunes_api(target_search_term)
         if itunes_fallback and itunes_fallback.get("stream_url"):
