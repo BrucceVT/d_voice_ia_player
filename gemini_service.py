@@ -42,7 +42,7 @@ class GeminiService:
     def __init__(self, api_key: str):
         """Inicializa el cliente de Google GenAI."""
         self.client = genai.Client(api_key=api_key)
-        self.candidate_models = ["gemini-3.6-flash", "gemini-2.0-flash-exp", "gemini-1.5-flash-latest"]
+        self.candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
 
     async def interpret_search_prompt(self, user_prompt: str) -> str:
         """Interpreta una solicitud o descripción informal y devuelve un término de búsqueda preciso."""
