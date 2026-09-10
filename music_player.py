@@ -8,6 +8,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Optional, List
 import re
+import subprocess
 import discord
 import yt_dlp
 
@@ -163,7 +164,37 @@ def get_direct_stream_from_info(info_dict: dict) -> Optional[str]:
             if candidate and not is_webpage_url(candidate):
                 return candidate
 
-    return None
+def detect_initial_silence(stream_url: str) -> float:
+    """Detecta si un stream de audio comienza con silencio muerto (>= 3s) y devuelve los segundos a saltar."""
+    if not stream_url or not isinstance(stream_url, str):
+        return 0.0
+    try:
+        cmd = [
+            'ffmpeg', '-hide_banner', '-ss', '0', '-i', stream_url,
+            '-t', '120', '-af', 'silencedetect=noise=-35dB:d=0.5',
+            '-f', 'null', '-'
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=4)
+        stderr = proc.stderr
+        silence_start_zero = False
+        silence_end = 0.0
+        for line in stderr.splitlines():
+            if 'silencedetect' in line:
+                if 'silence_start: 0' in line or 'silence_start: 0.0' in line:
+                    silence_start_zero = True
+                if 'silence_end:' in line and silence_start_zero:
+                    parts = line.split('|')
+                    for p in parts:
+                        if 'silence_end:' in p:
+                            val = p.split(':')[1].strip().split()[0]
+                            silence_end = float(val)
+                            break
+                    break
+        if silence_start_zero and silence_end > 3.0:
+            return max(0.0, silence_end - 0.3)
+    except Exception as e:
+        logger.warning(f"No se pudo analizar el silencio inicial del stream: {e}")
+    return 0.0
 
 
 @dataclass
@@ -373,9 +404,16 @@ class GuildMusicManager:
                 self.history.pop(0)
 
             try:
-                audio_source = discord.FFmpegPCMAudio(song.stream_url, **FFMPEG_OPTIONS)
-                
                 loop = asyncio.get_running_loop()
+                # Detectar si la pista tiene un silencio muerto al inicio y saltarlo con -ss de forma ultra limpia sin filtros de audio
+                skip_sec = await loop.run_in_executor(None, detect_initial_silence, song.stream_url)
+                ffmpeg_opts = dict(FFMPEG_OPTIONS)
+                if skip_sec > 3.0:
+                    logger.info(f"Silencio inicial de {skip_sec:.1f}s detectado en '{song.title}'. Aplicando salto de tiempo -ss {skip_sec:.1f}")
+                    ffmpeg_opts['before_options'] = f"{FFMPEG_OPTIONS['before_options']} -ss {skip_sec:.1f}"
+
+                audio_source = discord.FFmpegPCMAudio(song.stream_url, **ffmpeg_opts)
+                
                 self.voice_client.play(
                     audio_source,
                     after=lambda error: loop.call_soon_threadsafe(
