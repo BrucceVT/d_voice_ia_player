@@ -27,6 +27,7 @@ YTDL_OPTIONS = {
     'quiet': True,
     'no_warnings': True,
     'socket_timeout': 10,
+    'js_runtimes': {'node': {}},
     'http_headers': {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     },
