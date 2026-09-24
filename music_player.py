@@ -34,7 +34,7 @@ YTDL_OPTIONS = {
     },
     'extractor_args': {
         'youtube': {
-            'player_client': ['mweb', 'ios', 'android', 'web']
+            'player_client': ['ios', 'tvhtml5', 'android_vr', 'mweb']
         }
     }
 }
@@ -69,7 +69,7 @@ def is_webpage_url(url: str) -> bool:
     """Comprueba si una URL es una página web de video/playlist en lugar de un stream directo de media."""
     if not url or not isinstance(url, str) or not url.startswith(('http://', 'https://')):
         return True
-    if '/watch?' in url or 'youtu.be/' in url or '/playlist?' in url or '/shorts/' in url:
+    if '/watch?' in url or 'youtu.be/' in url or '/playlist?' in url or '/shorts/' in url or 'soundcloud.com/' in url:
         return True
     return False
 
@@ -97,17 +97,30 @@ async def resolve_youtube_oembed_title(url: str) -> Optional[str]:
 
 
 def extract_sc_entry(sc_target: str) -> Optional[dict]:
-    """Extrae la mejor entrada de audio completa desde SoundCloud dado un término scsearch."""
+    """Extrae la mejor entrada de audio completa desde SoundCloud omitiendo pistas protegidas por DRM."""
     opts = dict(YTDL_OPTIONS)
     with yt_dlp.YoutubeDL(opts) as ytdl_sc:
         info = ytdl_sc.extract_info(sc_target, download=False)
         if info and 'entries' in info and info['entries']:
-            full_tracks = [e for e in info['entries'] if e and e.get('duration', 0) > 45]
-            selected_entry = full_tracks[0] if full_tracks else info['entries'][0]
-            stream_url = get_direct_stream_from_info(selected_entry) or selected_entry.get('url')
-            if stream_url and not is_webpage_url(stream_url):
-                selected_entry['direct_stream_url'] = stream_url
-                return selected_entry
+            candidates = [e for e in info['entries'] if e and e.get('duration', 0) > 45]
+            if not candidates:
+                candidates = [e for e in info['entries'] if e]
+
+            for entry in candidates:
+                try:
+                    target_url = entry.get('webpage_url') or entry.get('url')
+                    if target_url and is_webpage_url(target_url):
+                        full_info = ytdl_sc.extract_info(target_url, download=False)
+                        if full_info:
+                            entry = full_info
+
+                    stream_url = get_direct_stream_from_info(entry) or entry.get('url')
+                    if stream_url and not is_webpage_url(stream_url):
+                        entry['direct_stream_url'] = stream_url
+                        return entry
+                except Exception as entry_err:
+                    logger.warning(f"Entrada SoundCloud '{entry.get('title')}' descartada por error/DRM: {entry_err}")
+                    continue
     return None
 
 

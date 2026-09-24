@@ -42,8 +42,8 @@ class GeminiService:
     def __init__(self, api_key: str):
         """Inicializa el cliente de Google GenAI."""
         self.client = genai.Client(api_key=api_key)
-        # Modelos optimizados para mínima latencia y alta velocidad (lite y 8b al inicio)
-        self.candidate_models = ["gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash-8b", "gemini-1.5-flash"]
+        # Modelos activos en la API de Google GenAI
+        self.candidate_models = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]
 
     async def interpret_search_prompt(self, user_prompt: str) -> str:
         """Interpreta una solicitud o descripción informal y devuelve un término de búsqueda preciso."""
