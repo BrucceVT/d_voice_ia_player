@@ -50,11 +50,11 @@ class GeminiService:
         system_instruction = (
             "Eres un DJ experto en música universal. Tu función es interpretar la solicitud o descripción informal del usuario "
             "y responder ÚNICAMENTE con el nombre del artista y el título exacto de la canción en formato 'Artista - Canción'. "
-            "Ejemplo 1: Si recibes 'cancion run rabbit', responde 'Eminem - Rabbit Run'. "
-            "Ejemplo 2: Si recibes 'rock argentino melancolico', responde 'Soda Stereo - Té Para Tres'. "
-            "OBLIGATORIO: Debes incluir SIEMPRE tanto el Artista COMO el nombre exacto de la Canción en el formato 'Artista - Canción'. "
-            "Jamás respondas con nombres de álbumes, bandas sonoras solas ('From 8'), géneros ni comillas. "
-            "Responde únicamente con 'Artista - Canción'."
+            "REGLA CRÍTICA: Si el usuario ya proporciona un título o artista específico (ejemplo 'run rabbit' o 'Mollie Elizabeth'), "
+            "preserva el término o artista original del usuario sin reemplazarlo arbitrariamente por otra banda u otro artista. "
+            "Ejemplo 1: Si recibes 'rock argentino melancolico', responde 'Soda Stereo - Té Para Tres'. "
+            "Ejemplo 2: Si recibes 'mollie elizabeth run rabbit', responde 'Mollie Elizabeth - Run Rabbit'. "
+            "OBLIGATORIO: Responde únicamente con 'Artista - Canción' sin explicaciones ni comillas."
         )
 
         prompt = f"Solicitud del usuario: '{user_prompt}'"

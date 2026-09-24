@@ -3,12 +3,105 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
-from music_player import GuildMusicManager, Song
+from music_player import GuildMusicManager, Song, is_webpage_url
 from gemini_service import GeminiService
 
 logger = logging.getLogger("MusicAIBot.Cog")
+
+
+class SongSelectionView(discord.ui.View):
+    """Menú interactivo de selección de canciones cuando hay múltiples opciones candidatos."""
+
+    def __init__(self, candidates: List[dict], requester: str, manager: GuildMusicManager, status_msg: discord.InteractionMessage, original_prompt: str, search_query: str):
+        super().__init__(timeout=30.0)
+        self.candidates = candidates
+        self.requester = requester
+        self.manager = manager
+        self.status_msg = status_msg
+        self.original_prompt = original_prompt
+        self.search_query = search_query
+
+        options = []
+        for i, c in enumerate(candidates[:5]):
+            title = c.get('title', 'Canción Desconocida')[:80]
+            uploader = c.get('uploader', 'Media')[:25]
+            duration = int(c.get('duration', 0))
+            mins, secs = divmod(duration, 60)
+            dur_str = f"{mins}:{secs:02d}" if duration > 0 else "Stream"
+            options.append(discord.SelectOption(
+                label=f"{i+1}. {title}",
+                value=str(i),
+                description=f"Canal: {uploader} | Duración: {dur_str}"
+            ))
+
+        select = discord.ui.Select(
+            placeholder="🔍 Selecciona la versión exacta de la canción...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+        select.callback = self.select_callback
+        self.add_item(select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer()
+
+            idx = int(self.children[0].values[0])
+            chosen_dict = self.candidates[idx]
+
+            # Resolver stream directo si no está pre-extraído
+            if chosen_dict.get("stream_url") and not is_webpage_url(chosen_dict.get("stream_url")):
+                song = Song.from_candidate_dict(chosen_dict, self.requester)
+            else:
+                song = await Song.from_query(chosen_dict.get("webpage_url") or chosen_dict.get("title"), self.requester)
+
+            await self.manager.add_to_queue(song)
+
+            embed = discord.Embed(
+                title="🎵 Canción Seleccionada y Añadida a la Cola",
+                description=f"[{song.title}]({song.webpage_url})",
+                color=discord.Color.brand_green()
+            )
+            embed.add_field(name="Solicitado por", value=song.requester, inline=True)
+            if song.duration > 0:
+                mins, secs = divmod(song.duration, 60)
+                embed.add_field(name="Duración", value=f"{mins}:{secs:02d}", inline=True)
+
+            self.stop()
+            await self.status_msg.edit(content=None, embed=embed, view=None)
+        except Exception as e:
+            logger.error(f"Error en callback de selección de canción: {e}", exc_info=True)
+            await interaction.followup.send(f"❌ Error al seleccionar la canción: `{e}`", ephemeral=True)
+
+    async def on_timeout(self):
+        """Si el usuario no selecciona en 30s, auto-seleccionar la opción 1 por defecto."""
+        try:
+            if self.candidates:
+                chosen_dict = self.candidates[0]
+                if chosen_dict.get("stream_url") and not is_webpage_url(chosen_dict.get("stream_url")):
+                    song = Song.from_candidate_dict(chosen_dict, self.requester)
+                else:
+                    song = await Song.from_query(chosen_dict.get("webpage_url") or chosen_dict.get("title"), self.requester)
+
+                await self.manager.add_to_queue(song)
+
+                embed = discord.Embed(
+                    title="🎵 Canción Añadida a la Cola (Opción 1 por defecto)",
+                    description=f"[{song.title}]({song.webpage_url})",
+                    color=discord.Color.brand_green()
+                )
+                embed.add_field(name="Solicitado por", value=song.requester, inline=True)
+                if song.duration > 0:
+                    mins, secs = divmod(song.duration, 60)
+                    embed.add_field(name="Duración", value=f"{mins}:{secs:02d}", inline=True)
+
+                await self.status_msg.edit(content=None, embed=embed, view=None)
+        except Exception as e:
+            logger.warning(f"Error en timeout de selección: {e}")
 
 
 class MusicCog(commands.Cog):
@@ -94,7 +187,22 @@ class MusicCog(commands.Cog):
                 await status_msg.edit(content="🤖 *Analizando tu solicitud con Gemini AI...*")
                 search_query = await self.gemini.interpret_search_prompt(cancion_o_prompt)
 
-            await status_msg.edit(content=f"🔎 *Buscando audio para: `{search_query}`...*")
+            await status_msg.edit(content=f"🔎 *Buscando opciones para: `{search_query}`...*")
+
+            # Buscar candidatos para menú interactivo si es una búsqueda de texto
+            if not is_url:
+                candidates = await Song.get_search_candidates(search_query, limit=5)
+                if len(candidates) > 1:
+                    embed_opts = discord.Embed(
+                        title="🔍 Opciones Encontradas - Selecciona tu Canción",
+                        description=f"Se encontraron {len(candidates)} versiones para `{search_query}`:\n" +
+                                    "\n".join([f"**{i+1}.** [{c['title']}]({c['webpage_url']})" for i, c in enumerate(candidates)]),
+                        color=discord.Color.blue()
+                    )
+                    embed_opts.set_footer(text="⏱️ Selecciona una opción del menú desplegable a continuación (expira en 30s)")
+                    view = SongSelectionView(candidates, interaction.user.display_name, manager, status_msg, cancion_o_prompt, search_query)
+                    await status_msg.edit(content=None, embed=embed_opts, view=view)
+                    return
 
             song = await asyncio.wait_for(
                 Song.from_query(search_query, interaction.user.display_name),

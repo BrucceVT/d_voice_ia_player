@@ -238,6 +238,69 @@ class Song:
     requester: str
 
     @classmethod
+    def from_candidate_dict(cls, data: dict, requester: str) -> "Song":
+        """Construye un objeto Song a partir de un diccionario de candidato."""
+        return cls(
+            title=data.get("title", "Canción Desconocida"),
+            webpage_url=data.get("webpage_url", ""),
+            stream_url=data.get("stream_url", ""),
+            duration=int(data.get("duration", 0)),
+            requester=requester
+        )
+
+    @classmethod
+    async def get_search_candidates(cls, query: str, limit: int = 5) -> List[dict]:
+        """Obtiene hasta `limit` resultados candidatos de búsqueda desde YouTube/SoundCloud."""
+        loop = asyncio.get_running_loop()
+        cleaned = sanitize_query(query)
+        if cleaned.startswith(("http://", "https://")):
+            return []
+
+        def _fetch_candidates():
+            opts = dict(YTDL_OPTIONS)
+            target = f"ytsearch{limit}:{cleaned}"
+            results = []
+            try:
+                with yt_dlp.YoutubeDL(opts) as ytdl_inst:
+                    info = ytdl_inst.extract_info(target, download=False)
+                    if info and 'entries' in info and info['entries']:
+                        for entry in info['entries']:
+                            if entry and entry.get('title'):
+                                stream_url = get_direct_stream_from_info(entry) or entry.get('url')
+                                results.append({
+                                    'title': entry.get('title'),
+                                    'webpage_url': entry.get('webpage_url') or f"https://www.youtube.com/watch?v={entry.get('id')}",
+                                    'stream_url': stream_url,
+                                    'duration': int(entry.get('duration', 0)),
+                                    'uploader': entry.get('uploader') or entry.get('channel') or "YouTube"
+                                })
+            except Exception as err:
+                logger.warning(f"Error extrayendo candidatos YouTube para '{cleaned}': {err}")
+
+            if not results:
+                sc_target = f"scsearch{limit}:{cleaned}"
+                try:
+                    with yt_dlp.YoutubeDL(opts) as ytdl_sc:
+                        sc_info = ytdl_sc.extract_info(sc_target, download=False)
+                        if sc_info and 'entries' in sc_info and sc_info['entries']:
+                            for entry in sc_info['entries']:
+                                if entry and entry.get('title') and not entry.get('is_drm'):
+                                    stream_url = get_direct_stream_from_info(entry) or entry.get('url')
+                                    results.append({
+                                        'title': entry.get('title'),
+                                        'webpage_url': entry.get('webpage_url') or entry.get('url'),
+                                        'stream_url': stream_url,
+                                        'duration': int(entry.get('duration', 0)),
+                                        'uploader': entry.get('uploader') or "SoundCloud"
+                                    })
+                except Exception as sc_err:
+                    logger.warning(f"Error extrayendo candidatos SoundCloud para '{cleaned}': {sc_err}")
+
+            return results
+
+        return await loop.run_in_executor(None, _fetch_candidates)
+
+    @classmethod
     async def from_query(cls, query: str, requester: str) -> "Song":
         """Busca o procesa la URL de forma asíncrona resolviendo el título exacto y el stream completo."""
         loop = asyncio.get_running_loop()
