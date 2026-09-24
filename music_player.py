@@ -28,12 +28,13 @@ YTDL_OPTIONS = {
     'no_warnings': True,
     'socket_timeout': 10,
     'js_runtimes': {'node': {}},
+    'remote_components': ['ejs:github'],
     'http_headers': {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     },
     'extractor_args': {
         'youtube': {
-            'player_client': ['android', 'android_vr']
+            'player_client': ['mweb', 'ios', 'android', 'web']
         }
     }
 }
@@ -49,12 +50,14 @@ ssl_ctx = ssl._create_unverified_context()
 
 
 def sanitize_query(query: str) -> str:
-    """Normaliza texto eliminando acentos, tildes y guiones huérfanos al final para evitar búsquedas incompletas."""
+    """Normaliza texto eliminando acentos, tildes, prefijos de comandos y guiones huérfanos."""
     if query.startswith(("http://", "https://")):
         return query
     normalized = unicodedata.normalize('NFKD', query)
     ascii_str = ''.join([c for c in normalized if not unicodedata.combining(c)])
     cleaned = ascii_str.strip().rstrip(" -:\t\n")
+    # Limpiar palabras de relleno al inicio como 'cancion', 'musica', 'reproduce', 'poner', 'pone', 'play'
+    cleaned = re.sub(r'^(?:cancion|musica|poner|pone|reproduce|escuchar|play)\s+', '', cleaned, flags=re.IGNORECASE).strip()
     if "-" in cleaned:
         parts = cleaned.split("-", 1)
         if not parts[1].strip():
@@ -215,15 +218,7 @@ class Song:
         is_url = cleaned_query.startswith(("http://", "https://"))
         target_search_term = cleaned_query
 
-        # 1. Si la consulta no es una URL y parece ambigua o corta, resolver el título oficial con iTunes
-        if not is_url and ("-" not in cleaned_query or len(cleaned_query.split()) < 2):
-            logger.info(f"Búsqueda ambigua '{cleaned_query}'. Resolviendo título oficial con iTunes...")
-            itunes_meta = await resolve_via_itunes_api(cleaned_query)
-            if itunes_meta and itunes_meta.get("title"):
-                target_search_term = itunes_meta["title"]
-                logger.info(f"iTunes resolvió el tema oficial: '{target_search_term}'")
-
-        # 2. Extracción de stream completo de audio vía YouTube (yt-dlp)
+        # 1. Extracción de stream completo de audio vía YouTube (yt-dlp)
         search_target = target_search_term if is_url else f"ytsearch1:{target_search_term}"
 
         def _extract_yt():
@@ -262,11 +257,11 @@ class Song:
             try:
                 return _resolve_entry(ytdl, search_target)
             except Exception as first_err:
-                logger.warning(f"Búsqueda primaria YouTube falló ({first_err}). Reintentando con cliente Android VR...")
+                logger.warning(f"Búsqueda primaria YouTube falló ({first_err}). Reintentando con cliente Android/Web...")
                 fallback_opts = dict(YTDL_OPTIONS)
                 fallback_opts['extractor_args'] = {
                     'youtube': {
-                        'player_client': ['android_vr', 'android']
+                        'player_client': ['android', 'android_vr', 'web']
                     }
                 }
                 with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
@@ -342,19 +337,7 @@ class Song:
                 except Exception as sc_url_err:
                     logger.warning(f"Fallback SoundCloud para URL de YouTube falló: {sc_url_err}")
 
-        # 4. Fallback de emergencia a vista previa de iTunes si la extracción de YouTube y SoundCloud fallaran por completo
-        logger.warning(f"Iniciando vista previa de iTunes como último recurso para: '{target_search_term}'")
-        itunes_fallback = await resolve_via_itunes_api(target_search_term)
-        if itunes_fallback and itunes_fallback.get("stream_url"):
-            return cls(
-                title=itunes_fallback["title"],
-                webpage_url=itunes_fallback["webpage_url"],
-                stream_url=itunes_fallback["stream_url"],
-                duration=itunes_fallback["duration"],
-                requester=requester
-            )
-
-        raise ValueError(f"No se pudo resolver el stream de audio para: '{query}'")
+        raise ValueError(f"No se pudo resolver el stream de audio completo en YouTube ni SoundCloud para: '{query}'")
 
 
 class GuildMusicManager:
