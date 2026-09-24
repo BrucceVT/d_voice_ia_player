@@ -34,10 +34,23 @@ YTDL_OPTIONS = {
     },
     'extractor_args': {
         'youtube': {
-            'player_client': ['ios', 'tvhtml5', 'android_vr', 'mweb']
+            'player_client': ['ios', 'tvhtml5', 'mweb', 'android']
         }
     }
 }
+
+# Cargar cookies de YouTube si existen en el entorno o en el archivo local cookies.txt
+COOKIES_FILE = "cookies.txt"
+if os.path.exists(COOKIES_FILE):
+    YTDL_OPTIONS['cookiefile'] = COOKIES_FILE
+elif os.getenv("YOUTUBE_COOKIES"):
+    try:
+        with open(COOKIES_FILE, "w", encoding="utf-8") as f:
+            f.write(os.getenv("YOUTUBE_COOKIES"))
+        YTDL_OPTIONS['cookiefile'] = COOKIES_FILE
+        logger.info("Cookies de YouTube cargadas exitosamente desde variable de entorno YOUTUBE_COOKIES")
+    except Exception as cookie_err:
+        logger.warning(f"No se pudieron guardar las cookies de YouTube: {cookie_err}")
 
 # Opciones de FFmpeg para reconexión activa de streams y reproducción de audio puro sin ningún filtro
 FFMPEG_OPTIONS = {
