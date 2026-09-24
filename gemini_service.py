@@ -42,7 +42,8 @@ class GeminiService:
     def __init__(self, api_key: str):
         """Inicializa el cliente de Google GenAI."""
         self.client = genai.Client(api_key=api_key)
-        self.candidate_models = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash", "gemini-1.5-pro"]
+        # Modelos optimizados para mínima latencia y alta velocidad (lite y 8b al inicio)
+        self.candidate_models = ["gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash-8b", "gemini-1.5-flash"]
 
     async def interpret_search_prompt(self, user_prompt: str) -> str:
         """Interpreta una solicitud o descripción informal y devuelve un término de búsqueda preciso."""
@@ -61,14 +62,14 @@ class GeminiService:
         for attempt in range(2):  # Reintento en caso de pico 503
             for model_name in self.candidate_models:
                 try:
-                    logger.info(f"Invocando Gemini API ({model_name}) para prompt: '{user_prompt}'")
+                    logger.info(f"Invocando Gemini API ultra-rápida ({model_name}) para prompt: '{user_prompt}'")
                     response = await self.client.aio.models.generate_content(
                         model=model_name,
                         contents=prompt,
                         config=types.GenerateContentConfig(
                             system_instruction=system_instruction,
-                            temperature=0.2,
-                            max_output_tokens=100,
+                            temperature=0.1,
+                            max_output_tokens=35,
                         )
                     )
 
@@ -114,7 +115,7 @@ class GeminiService:
                         config=types.GenerateContentConfig(
                             system_instruction=system_instruction,
                             temperature=0.7,
-                            max_output_tokens=100,
+                            max_output_tokens=35,
                         )
                     )
 
