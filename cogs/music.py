@@ -129,18 +129,7 @@ class MusicCog(commands.Cog):
                 await interaction.followup.send(msg)
             return None
 
-        # Obtener estado actualizado del miembro en el servidor por si recién se conectó a voz
-        member = interaction.user
-        if isinstance(member, discord.Member):
-            fresh_member = guild.get_member(member.id)
-            if fresh_member:
-                member = fresh_member
-        elif isinstance(member, discord.User):
-            fresh_member = guild.get_member(member.id)
-            if fresh_member:
-                member = fresh_member
-
-        voice_state = getattr(member, 'voice', None)
+        voice_state = getattr(interaction.user, 'voice', None)
         if not voice_state or not voice_state.channel:
             msg = "❌ Debes estar conectado a un canal de voz para reproducir música."
             if status_msg:
@@ -192,7 +181,7 @@ class MusicCog(commands.Cog):
                 await interaction.followup.send("❌ Este comando debe ejecutarse en un servidor.")
                 return
 
-            status_msg = await interaction.followup.send("🔊 *Verificando canal de voz...*", wait=True)
+            status_msg = await interaction.followup.send("🔊 *Conectando al canal de voz...*", wait=True)
 
             voice_client = await self._ensure_voice_connection(interaction, status_msg)
             if not voice_client:
