@@ -118,22 +118,38 @@ class MusicCog(commands.Cog):
             self.managers[guild_id] = GuildMusicManager(guild_id, self.bot)
         return self.managers[guild_id]
 
-    async def _ensure_voice_connection(self, interaction: discord.Interaction) -> Optional[discord.VoiceClient]:
+    async def _ensure_voice_connection(self, interaction: discord.Interaction, status_msg: Optional[discord.InteractionMessage] = None) -> Optional[discord.VoiceClient]:
         """Asegura que el usuario esté en un canal de voz y conecta al bot si es necesario."""
-        if not interaction.user or not isinstance(interaction.user, discord.Member):
-            await interaction.followup.send("⚠️ Este comando solo se puede usar dentro de un servidor.")
-            return None
-
-        if not interaction.user.voice or not interaction.user.voice.channel:
-            await interaction.followup.send("❌ Debes estar conectado a un canal de voz para reproducir música.")
-            return None
-
-        voice_channel = interaction.user.voice.channel
         guild = interaction.guild
-
-        if not guild:
+        if not guild or not interaction.user:
+            msg = "⚠️ Este comando solo se puede usar dentro de un servidor."
+            if status_msg:
+                await status_msg.edit(content=msg)
+            else:
+                await interaction.followup.send(msg)
             return None
 
+        # Obtener estado actualizado del miembro en el servidor por si recién se conectó a voz
+        member = interaction.user
+        if isinstance(member, discord.Member):
+            fresh_member = guild.get_member(member.id)
+            if fresh_member:
+                member = fresh_member
+        elif isinstance(member, discord.User):
+            fresh_member = guild.get_member(member.id)
+            if fresh_member:
+                member = fresh_member
+
+        voice_state = getattr(member, 'voice', None)
+        if not voice_state or not voice_state.channel:
+            msg = "❌ Debes estar conectado a un canal de voz para reproducir música."
+            if status_msg:
+                await status_msg.edit(content=msg)
+            else:
+                await interaction.followup.send(msg)
+            return None
+
+        voice_channel = voice_state.channel
         manager = self.get_manager(guild.id)
 
         try:
@@ -145,7 +161,11 @@ class MusicCog(commands.Cog):
                 logger.info(f"Bot movido al canal de voz '{voice_channel.name}' en guild {guild.id}")
         except Exception as e:
             logger.error(f"Error al conectar/mover al canal de voz: {e}", exc_info=True)
-            await interaction.followup.send(f"❌ No se pudo conectar al canal de voz `{voice_channel.name}`: `{e}`")
+            msg = f"❌ No se pudo conectar al canal de voz `{voice_channel.name}`: `{e}`"
+            if status_msg:
+                await status_msg.edit(content=msg)
+            else:
+                await interaction.followup.send(msg)
             return None
 
         return manager.voice_client
@@ -172,9 +192,9 @@ class MusicCog(commands.Cog):
                 await interaction.followup.send("❌ Este comando debe ejecutarse en un servidor.")
                 return
 
-            status_msg = await interaction.followup.send("🔊 *Conectando al canal de voz...*", wait=True)
+            status_msg = await interaction.followup.send("🔊 *Verificando canal de voz...*", wait=True)
 
-            voice_client = await self._ensure_voice_connection(interaction)
+            voice_client = await self._ensure_voice_connection(interaction, status_msg)
             if not voice_client:
                 return
 
