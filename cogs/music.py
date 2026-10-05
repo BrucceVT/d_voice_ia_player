@@ -25,15 +25,16 @@ class SongSelectionView(discord.ui.View):
 
         options = []
         for i, c in enumerate(candidates[:5]):
-            title = c.get('title', 'Canción Desconocida')[:80]
+            src = c.get('source', 'YouTube')
+            title = c.get('title', 'Canción Desconocida')[:70]
             uploader = c.get('uploader', 'Media')[:25]
             duration = int(c.get('duration', 0))
             mins, secs = divmod(duration, 60)
             dur_str = f"{mins}:{secs:02d}" if duration > 0 else "Stream"
             options.append(discord.SelectOption(
-                label=f"{i+1}. {title}",
+                label=f"{i+1}. [{src}] {title}"[:100],
                 value=str(i),
-                description=f"Canal: {uploader} | Duración: {dur_str}"
+                description=f"Canal: {uploader} | Duración: {dur_str} | Fuente: {src}"[:100]
             ))
 
         select = discord.ui.Select(
@@ -61,6 +62,8 @@ class SongSelectionView(discord.ui.View):
 
             await self.manager.add_to_queue(song)
 
+            source_badge = "🔴 YouTube" if getattr(song, 'source', 'YouTube') == "YouTube" else "🟠 SoundCloud"
+
             embed = discord.Embed(
                 title="🎵 Canción Seleccionada y Añadida a la Cola",
                 description=f"[{song.title}]({song.webpage_url})",
@@ -70,6 +73,7 @@ class SongSelectionView(discord.ui.View):
             if song.duration > 0:
                 mins, secs = divmod(song.duration, 60)
                 embed.add_field(name="Duración", value=f"{mins}:{secs:02d}", inline=True)
+            embed.add_field(name="Fuente", value=source_badge, inline=True)
 
             self.stop()
             await self.status_msg.edit(content=None, embed=embed, view=None)
@@ -89,6 +93,8 @@ class SongSelectionView(discord.ui.View):
 
                 await self.manager.add_to_queue(song)
 
+                source_badge = "🔴 YouTube" if getattr(song, 'source', 'YouTube') == "YouTube" else "🟠 SoundCloud"
+
                 embed = discord.Embed(
                     title="🎵 Canción Añadida a la Cola (Opción 1 por defecto)",
                     description=f"[{song.title}]({song.webpage_url})",
@@ -98,6 +104,7 @@ class SongSelectionView(discord.ui.View):
                 if song.duration > 0:
                     mins, secs = divmod(song.duration, 60)
                     embed.add_field(name="Duración", value=f"{mins}:{secs:02d}", inline=True)
+                embed.add_field(name="Fuente", value=source_badge, inline=True)
 
                 await self.status_msg.edit(content=None, embed=embed, view=None)
         except Exception as e:
@@ -202,11 +209,22 @@ class MusicCog(commands.Cog):
             if not is_url:
                 candidates = await Song.get_search_candidates(search_query, limit=5)
                 if len(candidates) > 1:
+                    first_src = candidates[0].get('source', 'YouTube')
+                    src_badge = "🔴 YouTube" if first_src == "YouTube" else "🟠 SoundCloud"
+                    color = discord.Color.red() if first_src == "YouTube" else discord.Color.orange()
+
+                    lines = []
+                    for i, c in enumerate(candidates):
+                        icon = "🔴" if c.get('source') == "YouTube" else "🟠"
+                        dur = int(c.get('duration', 0))
+                        m, s = divmod(dur, 60)
+                        dur_str = f" ({m}:{s:02d})" if dur > 0 else ""
+                        lines.append(f"**{i+1}.** {icon} **[{c.get('source', 'Media')}]** [{c['title']}]({c['webpage_url']}){dur_str}")
+
                     embed_opts = discord.Embed(
-                        title="🔍 Opciones Encontradas - Selecciona tu Canción",
-                        description=f"Se encontraron {len(candidates)} versiones para `{search_query}`:\n" +
-                                    "\n".join([f"**{i+1}.** [{c['title']}]({c['webpage_url']})" for i, c in enumerate(candidates)]),
-                        color=discord.Color.blue()
+                        title=f"🔍 Opciones Encontradas ({src_badge}) - Selecciona tu Canción",
+                        description=f"Se encontraron {len(candidates)} versiones en **{first_src}** para `{search_query}`:\n\n" + "\n".join(lines),
+                        color=color
                     )
                     embed_opts.set_footer(text="⏱️ Selecciona una opción del menú desplegable a continuación (expira en 30s)")
                     view = SongSelectionView(candidates, interaction.user.display_name, manager, status_msg, cancion_o_prompt, search_query)
@@ -219,17 +237,21 @@ class MusicCog(commands.Cog):
             )
             await manager.add_to_queue(song)
 
+            source_badge = "🔴 YouTube" if getattr(song, 'source', 'YouTube') == "YouTube" else "🟠 SoundCloud"
+
             embed = discord.Embed(
                 title="🎵 Canción Añadida a la Cola",
                 description=f"[{song.title}]({song.webpage_url})",
                 color=discord.Color.brand_green()
             )
             embed.add_field(name="Solicitado por", value=song.requester, inline=True)
-            
+
             if song.duration > 0:
                 mins, secs = divmod(song.duration, 60)
                 embed.add_field(name="Duración", value=f"{mins}:{secs:02d}", inline=True)
-            
+
+            embed.add_field(name="Fuente", value=source_badge, inline=True)
+
             if not is_url and search_query != cancion_o_prompt:
                 embed.set_footer(text=f"💡 Prompt original: '{cancion_o_prompt}' ➔ Búsqueda: '{search_query}'")
 
