@@ -80,10 +80,10 @@ def sanitize_query(query: str) -> str:
 
 
 def is_webpage_url(url: str) -> bool:
-    """Comprueba si una URL es una página web de video/playlist en lugar de un stream directo de media."""
+    """Comprueba si una URL es una página web de video/playlist de YouTube en lugar de un stream directo de media."""
     if not url or not isinstance(url, str) or not url.startswith(('http://', 'https://')):
         return True
-    if '/watch?' in url or 'youtu.be/' in url or '/playlist?' in url or '/shorts/' in url or 'soundcloud.com/' in url:
+    if '/watch?' in url or 'youtu.be/' in url or '/playlist?' in url or '/shorts/' in url:
         return True
     return False
 
@@ -123,15 +123,12 @@ def extract_sc_entry(sc_target: str) -> Optional[dict]:
             for entry in candidates:
                 try:
                     target_url = entry.get('webpage_url') or entry.get('url')
-                    if target_url and is_webpage_url(target_url):
-                        full_info = ytdl_sc.extract_info(target_url, download=False)
-                        if full_info:
-                            entry = full_info
-
-                    stream_url = get_direct_stream_from_info(entry) or entry.get('url')
-                    if stream_url and not is_webpage_url(stream_url):
-                        entry['direct_stream_url'] = stream_url
-                        return entry
+                    full_info = ytdl_sc.extract_info(target_url, download=False) if target_url else entry
+                    if full_info:
+                        stream_url = get_direct_stream_from_info(full_info) or full_info.get('url')
+                        if stream_url and stream_url.startswith(('http://', 'https://')):
+                            full_info['direct_stream_url'] = stream_url
+                            return full_info
                 except Exception as entry_err:
                     logger.warning(f"Entrada SoundCloud '{entry.get('title')}' descartada por error/DRM: {entry_err}")
                     continue
