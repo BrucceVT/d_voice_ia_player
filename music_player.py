@@ -88,6 +88,15 @@ def is_webpage_url(url: str) -> bool:
     return False
 
 
+def extract_yt_id(query_or_url: str) -> str:
+    """Extrae el ID de video de YouTube de 11 caracteres si es una URL de YouTube."""
+    if any(domain in query_or_url for domain in ("youtube.com", "youtu.be")):
+        match = re.search(r'(?:v=|\/|be\/|shorts\/)([a-zA-Z0-9_-]{11})', query_or_url)
+        if match:
+            return match.group(1)
+    return query_or_url
+
+
 async def resolve_youtube_oembed_title(url: str) -> Optional[str]:
     """Obtiene el título oficial de un video de YouTube sin autenticación ni bloqueos de IP mediante el endpoint público de oEmbed."""
     if not any(domain in url for domain in ("youtube.com", "youtu.be")):
@@ -301,7 +310,8 @@ class Song:
         target_search_term = cleaned_query
 
         # 1. Extracción de stream completo de audio vía YouTube (yt-dlp)
-        search_target = target_search_term if is_url else f"ytsearch1:{target_search_term}"
+        yt_term = extract_yt_id(cleaned_query)
+        search_target = f"ytsearch1:{yt_term}"
 
         def _extract_yt():
             def _resolve_entry(extractor_instance, target):
