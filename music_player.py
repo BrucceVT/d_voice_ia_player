@@ -35,21 +35,18 @@ YTDL_OPTIONS = {
     },
     'extractor_args': {
         'youtube': {
-            'player_client': ['android_music', 'tvhtml5', 'android_vr', 'android']
+            'player_client': ['visionos', 'tvhtml5', 'android_music', 'android_vr', 'android']
         }
     }
 }
 
-# Cargar cookies de YouTube si existen en el entorno o en el archivo local cookies.txt
+# Preparar cookies de YouTube en disco si existen en el entorno para uso exclusivo en fallback
 COOKIES_FILE = "cookies.txt"
-if os.path.exists(COOKIES_FILE):
-    YTDL_OPTIONS['cookiefile'] = COOKIES_FILE
-elif os.getenv("YOUTUBE_COOKIES"):
+if os.getenv("YOUTUBE_COOKIES"):
     try:
         with open(COOKIES_FILE, "w", encoding="utf-8") as f:
             f.write(os.getenv("YOUTUBE_COOKIES"))
-        YTDL_OPTIONS['cookiefile'] = COOKIES_FILE
-        logger.info("Cookies de YouTube cargadas exitosamente desde variable de entorno YOUTUBE_COOKIES")
+        logger.info("Cookies de YouTube preparadas exitosamente desde variable de entorno YOUTUBE_COOKIES")
     except Exception as cookie_err:
         logger.warning(f"No se pudieron guardar las cookies de YouTube: {cookie_err}")
 
@@ -354,9 +351,11 @@ class Song:
             except Exception as first_err:
                 logger.warning(f"Búsqueda primaria YouTube falló ({first_err}). Reintentando con clientes fallback...")
                 fallback_opts = dict(YTDL_OPTIONS)
+                if os.path.exists(COOKIES_FILE):
+                    fallback_opts['cookiefile'] = COOKIES_FILE
                 fallback_opts['extractor_args'] = {
                     'youtube': {
-                        'player_client': ['tvhtml5', 'android_music', 'android_vr', 'android']
+                        'player_client': ['mweb', 'web', 'tvhtml5']
                     }
                 }
                 with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
