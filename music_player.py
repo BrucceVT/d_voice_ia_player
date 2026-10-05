@@ -255,7 +255,7 @@ class Song:
 
     @classmethod
     async def get_search_candidates(cls, query: str, limit: int = 5) -> List[dict]:
-        """Obtiene hasta `limit` resultados candidatos de búsqueda desde YouTube (proveedor principal) o SoundCloud (fallback)."""
+        """Obtiene candidatos de búsqueda desde YouTube usando extract_flat='in_playlist' (Opción B: Búsqueda liviana)."""
         loop = asyncio.get_running_loop()
         cleaned = sanitize_query(query)
         if cleaned.startswith(("http://", "https://")):
@@ -263,9 +263,10 @@ class Song:
 
         def _fetch_candidates():
             opts = dict(YTDL_OPTIONS)
+            opts['extract_flat'] = 'in_playlist'
+            opts['skip_download'] = True
             opts['ignoreerrors'] = True
 
-            # 1. Buscar primero en YouTube (Proveedor Primario)
             target = f"ytsearch{limit}:{cleaned}"
             results = []
             try:
@@ -274,39 +275,18 @@ class Song:
                     if info and 'entries' in info and info['entries']:
                         for entry in info['entries']:
                             if entry and entry.get('title'):
-                                stream_url = get_direct_stream_from_info(entry) or entry.get('url')
+                                vid = entry.get('id')
+                                webpage = entry.get('webpage_url') or entry.get('url') or (f"https://www.youtube.com/watch?v={vid}" if vid else f"https://www.youtube.com")
                                 results.append({
                                     'title': entry.get('title'),
-                                    'webpage_url': entry.get('webpage_url') or f"https://www.youtube.com/watch?v={entry.get('id')}",
-                                    'stream_url': stream_url,
+                                    'webpage_url': webpage,
+                                    'stream_url': webpage,
                                     'duration': int(entry.get('duration', 0)),
                                     'uploader': entry.get('uploader') or entry.get('channel') or "YouTube",
                                     'source': 'YouTube'
                                 })
             except Exception as err:
-                logger.warning(f"Error extrayendo candidatos YouTube para '{cleaned}': {err}")
-
-            # 2. Únicamente si YouTube NO devolvió ningún candidato, buscar en SoundCloud
-            if not results:
-                logger.info(f"YouTube no devolvió candidatos para '{cleaned}'. Buscando en SoundCloud...")
-                sc_target = f"scsearch{limit}:{cleaned}"
-                try:
-                    with yt_dlp.YoutubeDL(opts) as ytdl_sc:
-                        sc_info = ytdl_sc.extract_info(sc_target, download=False)
-                        if sc_info and 'entries' in sc_info and sc_info['entries']:
-                            for entry in sc_info['entries']:
-                                if entry and entry.get('title') and not entry.get('is_drm'):
-                                    stream_url = get_direct_stream_from_info(entry)
-                                    results.append({
-                                        'title': entry.get('title'),
-                                        'webpage_url': entry.get('webpage_url') or entry.get('url'),
-                                        'stream_url': stream_url,
-                                        'duration': int(entry.get('duration', 0)),
-                                        'uploader': entry.get('uploader') or "SoundCloud",
-                                        'source': 'SoundCloud'
-                                    })
-                except Exception as sc_err:
-                    logger.warning(f"Error extrayendo candidatos SoundCloud para '{cleaned}': {sc_err}")
+                logger.warning(f"Error extrayendo candidatos livianos de YouTube para '{cleaned}': {err}")
 
             return results
 
@@ -314,7 +294,7 @@ class Song:
 
     @classmethod
     async def from_query(cls, query: str, requester: str) -> "Song":
-        """Busca o procesa la URL de forma asíncrona resolviendo el título exacto y el stream completo."""
+        """Busca o procesa la URL de forma asíncrona resolviendo el título exacto y el stream completo desde YouTube."""
         loop = asyncio.get_running_loop()
         cleaned_query = sanitize_query(query)
         is_url = cleaned_query.startswith(("http://", "https://"))
@@ -331,7 +311,10 @@ class Song:
                     raise ValueError(f"No se obtuvieron datos de extracción para {target}")
 
                 if 'entries' in info and info['entries']:
-                    entry = info['entries'][0]
+                    valid_entries = [e for e in info['entries'] if e]
+                    if not valid_entries:
+                        raise ValueError("La búsqueda no devolvió ninguna entrada válida.")
+                    entry = valid_entries[0]
                 else:
                     entry = info
 
@@ -342,7 +325,7 @@ class Song:
 
                 if not stream_url:
                     vid_url = entry.get('webpage_url') or (f"https://www.youtube.com/watch?v={entry.get('id')}" if entry.get('id') else None)
-                    if vid_url:
+                    if vid_url and vid_url != target:
                         logger.info(f"Resolviendo metadatos completos desde video URL: {vid_url}")
                         full_entry = extractor_instance.extract_info(vid_url, download=False)
                         stream_url = get_direct_stream_from_info(full_entry)
@@ -370,9 +353,11 @@ class Song:
                     return _resolve_entry(ytdl_fallback, search_target)
 
         data = None
+        yt_failure_reason = None
         try:
             data = await loop.run_in_executor(None, _extract_yt)
         except Exception as yt_err:
+            yt_failure_reason = str(yt_err)
             logger.warning(f"yt-dlp YouTube falló para '{target_search_term}': {yt_err}")
 
         if data and data.get("direct_stream_url"):
@@ -391,27 +376,7 @@ class Song:
                     source="YouTube"
                 )
 
-        # 3. Extracción de stream completo vía SoundCloud (Fallback si YouTube fallara)
-        if not is_url:
-            sc_target = f"scsearch5:{target_search_term}"
-            try:
-                sc_data = await loop.run_in_executor(None, extract_sc_entry, sc_target)
-                if sc_data and sc_data.get("direct_stream_url"):
-                    title = sc_data.get("title", target_search_term)
-                    webpage_url = sc_data.get("webpage_url") or query
-                    stream_url = sc_data.get("direct_stream_url")
-                    duration = int(sc_data.get("duration", 0))
-                    logger.info(f"Extracción COMPLETA exitosa vía SoundCloud para '{title}' ({duration}s)")
-                    return cls(
-                        title=title,
-                        webpage_url=webpage_url,
-                        stream_url=stream_url,
-                        duration=duration,
-                        requester=requester,
-                        source="SoundCloud"
-                    )
-            except Exception as sc_err:
-                logger.warning(f"Extracción SoundCloud falló para '{target_search_term}': {sc_err}")
+        raise ValueError(f"No se pudo resolver el stream de audio en YouTube para: '{query}' ({yt_failure_reason or 'Stream no disponible'})")
 
         # 4. Fallback de resolución inteligente para URLs de YouTube cuando la IP del servidor es bloqueada ("Sign in to confirm you're not a bot")
         if is_url and any(domain in cleaned_query for domain in ("youtube.com", "youtu.be")):
