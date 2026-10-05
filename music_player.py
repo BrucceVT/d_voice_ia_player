@@ -35,7 +35,7 @@ YTDL_OPTIONS = {
     },
     'extractor_args': {
         'youtube': {
-            'player_client': ['tvhtml5', 'android_vr']
+            'player_client': ['android', 'android_vr', 'mweb', 'tvhtml5']
         }
     }
 }
@@ -352,11 +352,11 @@ class Song:
             try:
                 return _resolve_entry(ytdl, search_target)
             except Exception as first_err:
-                logger.warning(f"Búsqueda primaria YouTube falló ({first_err}). Reintentando con cliente TV/VR fallback...")
+                logger.warning(f"Búsqueda primaria YouTube falló ({first_err}). Reintentando con clientes fallback...")
                 fallback_opts = dict(YTDL_OPTIONS)
                 fallback_opts['extractor_args'] = {
                     'youtube': {
-                        'player_client': ['android_vr', 'tvhtml5']
+                        'player_client': ['android_vr', 'mweb', 'tvhtml5', 'android']
                     }
                 }
                 with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
