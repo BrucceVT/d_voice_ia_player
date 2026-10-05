@@ -35,7 +35,7 @@ YTDL_OPTIONS = {
     },
     'extractor_args': {
         'youtube': {
-            'player_client': ['android_music', 'tvhtml5', 'web_creator', 'ios']
+            'player_client': ['android_music', 'tvhtml5', 'android_vr', 'android']
         }
     }
 }
@@ -356,7 +356,7 @@ class Song:
                 fallback_opts = dict(YTDL_OPTIONS)
                 fallback_opts['extractor_args'] = {
                     'youtube': {
-                        'player_client': ['tvhtml5', 'android_music', 'web_creator']
+                        'player_client': ['tvhtml5', 'android_music', 'android_vr', 'android']
                     }
                 }
                 with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
