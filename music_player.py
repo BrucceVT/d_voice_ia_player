@@ -494,6 +494,10 @@ class GuildMusicManager:
                 logger.warning(f"Intento de reproducir en guild {self.guild_id} sin conexión de voz.")
                 return
 
+            if self.voice_client.is_playing() or self.voice_client.is_paused():
+                logger.info(f"El reproductor de voz en {self.guild_id} ya se encuentra activo.")
+                return
+
             if self.queue.empty():
                 self.current_song = None
                 logger.info(f"Cola vacía en servidor {self.guild_id}. Iniciando temporizador de auto-desconexión.")
@@ -511,14 +515,7 @@ class GuildMusicManager:
 
             try:
                 loop = asyncio.get_running_loop()
-                # Detectar si la pista tiene un silencio muerto al inicio y saltarlo con -ss de forma ultra limpia sin filtros de audio
-                skip_sec = await loop.run_in_executor(None, detect_initial_silence, song.stream_url)
-                ffmpeg_opts = dict(FFMPEG_OPTIONS)
-                if skip_sec > 3.0:
-                    logger.info(f"Silencio inicial de {skip_sec:.1f}s detectado en '{song.title}'. Aplicando salto de tiempo -ss {skip_sec:.1f}")
-                    ffmpeg_opts['before_options'] = f"{FFMPEG_OPTIONS['before_options']} -ss {skip_sec:.1f}"
-
-                audio_source = discord.FFmpegPCMAudio(song.stream_url, **ffmpeg_opts)
+                audio_source = discord.FFmpegPCMAudio(song.stream_url, **FFMPEG_OPTIONS)
                 transformed_source = discord.PCMVolumeTransformer(audio_source, volume=1.0)
                 
                 self.voice_client.play(
