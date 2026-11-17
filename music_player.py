@@ -45,16 +45,10 @@ YTDL_OPTIONS = {
     },
     'extractor_args': {
         'youtube': {
-            'player_client': ['web', 'web_safari', 'web_embedded'] if os.path.exists(COOKIES_FILE) else ['visionos', 'android_vr', 'android']
+            'player_client': ['visionos', 'web_embedded', 'android_vr', 'android']
         }
     }
 }
-
-if os.path.exists(COOKIES_FILE):
-    YTDL_OPTIONS['cookiefile'] = COOKIES_FILE
-    logger.info("yt-dlp configurado con cookiefile y clientes web autorizados.")
-else:
-    logger.info("yt-dlp configurado sin cookies usando clientes unauthenticated.")
 
 # Opciones de FFmpeg para reconexión activa de streams y reproducción de audio puro sin ningún filtro
 FFMPEG_OPTIONS = {
@@ -525,9 +519,10 @@ class GuildMusicManager:
                     ffmpeg_opts['before_options'] = f"{FFMPEG_OPTIONS['before_options']} -ss {skip_sec:.1f}"
 
                 audio_source = discord.FFmpegPCMAudio(song.stream_url, **ffmpeg_opts)
+                transformed_source = discord.PCMVolumeTransformer(audio_source, volume=1.0)
                 
                 self.voice_client.play(
-                    audio_source,
+                    transformed_source,
                     after=lambda error: loop.call_soon_threadsafe(
                         self._handle_song_end, error
                     )

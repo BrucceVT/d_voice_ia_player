@@ -13,9 +13,11 @@ ENV PYTHONUNBUFFERED=1 \
 # Definir directorio de trabajo
 WORKDIR /app
 
-# Instalación de dependencias del sistema requeridas por FFmpeg y PyNaCl/discord.py
+# Instalación de dependencias del sistema requeridas por FFmpeg, libopus y PyNaCl/discord.py
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    libopus0 \
+    libopus-dev \
     nodejs \
     ca-certificates \
     libffi-dev \

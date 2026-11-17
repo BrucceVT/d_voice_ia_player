@@ -160,7 +160,7 @@ class MusicCog(commands.Cog):
 
         try:
             if not manager.voice_client or not manager.voice_client.is_connected():
-                manager.voice_client = await voice_channel.connect(timeout=10.0, reconnect=True)
+                manager.voice_client = await voice_channel.connect(timeout=20.0, reconnect=True, self_deaf=True)
                 logger.info(f"Bot conectado al canal de voz '{voice_channel.name}' en guild {guild.id}")
             elif manager.voice_client.channel != voice_channel:
                 await manager.voice_client.move_to(voice_channel)

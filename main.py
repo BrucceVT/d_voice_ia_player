@@ -82,6 +82,17 @@ class MusicBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         """Inicialización asíncrona previa al login: Cargar cogs e iniciar servidor de salud."""
+        # Verificar y cargar la librería Opus nativa si es necesario
+        if not discord.opus.is_loaded():
+            for lib_name in ('libopus.so.0', 'libopus.so.1', 'libopus.so', 'opus'):
+                try:
+                    discord.opus.load_opus(lib_name)
+                    logger.info(f"Librería nativa de Opus cargada exitosamente: {lib_name}")
+                    break
+                except Exception:
+                    pass
+        logger.info(f"Estado de Opus en discord.py: Cargado = {discord.opus.is_loaded()}")
+
         logger.info("Cargando módulos y cogs...")
         await self.load_extension("cogs.music")
         
