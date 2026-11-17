@@ -15,6 +15,16 @@ import yt_dlp
 
 logger = logging.getLogger("MusicAIBot.Player")
 
+# Preparar cookies de YouTube en disco si existen en el entorno o archivo local
+COOKIES_FILE = "cookies.txt"
+if os.getenv("YOUTUBE_COOKIES"):
+    try:
+        with open(COOKIES_FILE, "w", encoding="utf-8") as f:
+            f.write(os.getenv("YOUTUBE_COOKIES"))
+        logger.info("Cookies de YouTube preparadas exitosamente desde variable de entorno YOUTUBE_COOKIES")
+    except Exception as cookie_err:
+        logger.warning(f"No se pudieron guardar las cookies de YouTube: {cookie_err}")
+
 # Opciones de yt-dlp optimizadas para extracción completa de audio sin descargas a disco
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
@@ -35,20 +45,16 @@ YTDL_OPTIONS = {
     },
     'extractor_args': {
         'youtube': {
-            'player_client': ['visionos', 'tvhtml5', 'android_music', 'android_vr', 'android']
+            'player_client': ['web', 'web_safari', 'web_embedded'] if os.path.exists(COOKIES_FILE) else ['visionos', 'android_vr', 'android']
         }
     }
 }
 
-# Preparar cookies de YouTube en disco si existen en el entorno para uso exclusivo en fallback
-COOKIES_FILE = "cookies.txt"
-if os.getenv("YOUTUBE_COOKIES"):
-    try:
-        with open(COOKIES_FILE, "w", encoding="utf-8") as f:
-            f.write(os.getenv("YOUTUBE_COOKIES"))
-        logger.info("Cookies de YouTube preparadas exitosamente desde variable de entorno YOUTUBE_COOKIES")
-    except Exception as cookie_err:
-        logger.warning(f"No se pudieron guardar las cookies de YouTube: {cookie_err}")
+if os.path.exists(COOKIES_FILE):
+    YTDL_OPTIONS['cookiefile'] = COOKIES_FILE
+    logger.info("yt-dlp configurado con cookiefile y clientes web autorizados.")
+else:
+    logger.info("yt-dlp configurado sin cookies usando clientes unauthenticated.")
 
 # Opciones de FFmpeg para reconexión activa de streams y reproducción de audio puro sin ningún filtro
 FFMPEG_OPTIONS = {
@@ -94,8 +100,8 @@ def extract_yt_id(query_or_url: str) -> str:
     return query_or_url
 
 
-async def resolve_youtube_oembed_title(url: str) -> Optional[str]:
-    """Obtiene el título oficial de un video de YouTube sin autenticación ni bloqueos de IP mediante el endpoint público de oEmbed."""
+async def resolve_youtube_oembed_data(url: str) -> Optional[dict]:
+    """Obtiene metadatos oficiales (título, autor) de un video de YouTube vía oEmbed sin autenticación ni bloqueos."""
     if not any(domain in url for domain in ("youtube.com", "youtu.be")):
         return None
 
@@ -107,13 +113,18 @@ async def resolve_youtube_oembed_title(url: str) -> Optional[str]:
         try:
             with urllib.request.urlopen(req, timeout=5, context=ssl_ctx) as resp:
                 if resp.status == 200:
-                    data = json.loads(resp.read().decode('utf-8'))
-                    return data.get("title")
+                    return json.loads(resp.read().decode('utf-8'))
         except Exception as e:
             logger.warning(f"Error resolviendo oEmbed para YouTube URL '{url}': {e}")
         return None
 
     return await loop.run_in_executor(None, _fetch)
+
+
+async def resolve_youtube_oembed_title(url: str) -> Optional[str]:
+    """Obtiene el título oficial de un video de YouTube sin autenticación ni bloqueos de IP mediante el endpoint público de oEmbed."""
+    data = await resolve_youtube_oembed_data(url)
+    return data.get("title") if data else None
 
 
 def extract_sc_entry(sc_target: str) -> Optional[dict]:
@@ -299,16 +310,21 @@ class Song:
         return await loop.run_in_executor(None, _fetch_candidates)
 
     @classmethod
-    async def from_query(cls, query: str, requester: str) -> "Song":
-        """Busca o procesa la URL de forma asíncrona resolviendo el título exacto y el stream completo desde YouTube."""
+    async def from_query(cls, query: str, requester: str, fallback_title: Optional[str] = None) -> "Song":
+        """Busca o procesa la URL de forma asíncrona resolviendo el título exacto y el stream completo desde YouTube (con fallback a SoundCloud)."""
         loop = asyncio.get_running_loop()
         cleaned_query = sanitize_query(query)
         is_url = cleaned_query.startswith(("http://", "https://"))
         target_search_term = cleaned_query
 
         # 1. Extracción de stream completo de audio vía YouTube (yt-dlp)
-        yt_term = extract_yt_id(cleaned_query)
-        search_target = f"ytsearch1:{yt_term}"
+        yt_id = extract_yt_id(cleaned_query) if is_url else None
+        if yt_id and len(yt_id) == 11 and is_url:
+            search_target = f"https://www.youtube.com/watch?v={yt_id}"
+        elif is_url:
+            search_target = cleaned_query
+        else:
+            search_target = f"ytsearch1:{cleaned_query}"
 
         def _extract_yt():
             def _resolve_entry(extractor_instance, target):
@@ -353,11 +369,17 @@ class Song:
                 fallback_opts = dict(YTDL_OPTIONS)
                 if os.path.exists(COOKIES_FILE):
                     fallback_opts['cookiefile'] = COOKIES_FILE
-                fallback_opts['extractor_args'] = {
-                    'youtube': {
-                        'player_client': ['mweb', 'web', 'tvhtml5']
+                    fallback_opts['extractor_args'] = {
+                        'youtube': {
+                            'player_client': ['web_safari', 'web_creator', 'web', 'web_embedded']
+                        }
                     }
-                }
+                else:
+                    fallback_opts['extractor_args'] = {
+                        'youtube': {
+                            'player_client': ['tv_downgraded', 'web']
+                        }
+                    }
                 with yt_dlp.YoutubeDL(fallback_opts) as ytdl_fallback:
                     return _resolve_entry(ytdl_fallback, search_target)
 
@@ -385,22 +407,27 @@ class Song:
                     source="YouTube"
                 )
 
-        raise ValueError(f"No se pudo resolver el stream de audio en YouTube para: '{query}' ({yt_failure_reason or 'Stream no disponible'})")
-
-        # 4. Fallback de resolución inteligente para URLs de YouTube cuando la IP del servidor es bloqueada ("Sign in to confirm you're not a bot")
+        # 2. Fallback de resolución inteligente para URLs de YouTube cuando la IP del servidor es bloqueada ("Sign in to confirm you're not a bot")
         if is_url and any(domain in cleaned_query for domain in ("youtube.com", "youtu.be")):
-            logger.info(f"YouTube bloqueó la extracción directa para la URL '{cleaned_query}'. Obteniendo título del video vía oEmbed...")
-            yt_title = await resolve_youtube_oembed_title(cleaned_query)
-            if yt_title:
-                # Limpiar etiquetas ruidosas (ej. | COVER ESPAÑOL |, [Official MV], etc.) para buscar la canción limpia en SoundCloud
-                clean_term = re.sub(r'(?i)(\||\bcover\b|\bespañol\b|\bspanish\b|\bofficial\b|\bvideo\b|\bmv\b|\bhd\b|\b320kbps\b|\[.*?\]|\(.*?\))', ' ', yt_title)
-                clean_title = sanitize_query(' '.join(clean_term.split())) or sanitize_query(yt_title)
-                logger.info(f"Título resuelto vía oEmbed: '{yt_title}' -> Búsqueda SoundCloud: '{clean_title}'")
+            logger.info(f"YouTube falló para la URL '{cleaned_query}'. Intentando resolver vía oEmbed y SoundCloud...")
+            resolved_title = fallback_title
+            if not resolved_title:
+                oembed_data = await resolve_youtube_oembed_data(cleaned_query)
+                if oembed_data and oembed_data.get("title"):
+                    raw_title = oembed_data.get("title", "")
+                    author = oembed_data.get("author_name", "")
+                    author = re.sub(r' - Topic$', '', author, flags=re.IGNORECASE).strip()
+                    resolved_title = f"{author} - {raw_title}".strip(" -") if author and author.lower() not in raw_title.lower() else raw_title
+
+            if resolved_title:
+                clean_term = re.sub(r'(?i)(\||\bcover\b|\bespañol\b|\bspanish\b|\bofficial\b|\bvideo\b|\bmv\b|\bhd\b|\b320kbps\b|\[.*?\]|\(.*?\))', ' ', resolved_title)
+                clean_title = sanitize_query(' '.join(clean_term.split())) or sanitize_query(resolved_title)
+                logger.info(f"Buscando alternativa en SoundCloud para: '{clean_title}'")
                 sc_fallback_target = f"scsearch5:{clean_title}"
                 try:
                     sc_data = await loop.run_in_executor(None, extract_sc_entry, sc_fallback_target)
                     if sc_data and sc_data.get("direct_stream_url"):
-                        title = sc_data.get("title") or yt_title
+                        title = sc_data.get("title") or resolved_title
                         webpage_url = sc_data.get("webpage_url") or cleaned_query
                         stream_url = sc_data.get("direct_stream_url")
                         duration = int(sc_data.get("duration", 0))
@@ -410,12 +437,35 @@ class Song:
                             webpage_url=webpage_url,
                             stream_url=stream_url,
                             duration=duration,
-                            requester=requester
+                            requester=requester,
+                            source="SoundCloud"
                         )
                 except Exception as sc_url_err:
                     logger.warning(f"Fallback SoundCloud para URL de YouTube falló: {sc_url_err}")
 
-        raise ValueError(f"No se pudo resolver el stream de audio completo en YouTube ni SoundCloud para: '{query}'")
+        # 3. Fallback SoundCloud para consultas de texto
+        if not is_url:
+            sc_target = f"scsearch5:{target_search_term}"
+            try:
+                sc_data = await loop.run_in_executor(None, extract_sc_entry, sc_target)
+                if sc_data and sc_data.get("direct_stream_url"):
+                    title = sc_data.get("title") or target_search_term
+                    webpage_url = sc_data.get("webpage_url") or query
+                    stream_url = sc_data.get("direct_stream_url")
+                    duration = int(sc_data.get("duration", 0))
+                    logger.info(f"Éxito: Audio resuelto vía SoundCloud para '{title}' ({duration}s)")
+                    return cls(
+                        title=title,
+                        webpage_url=webpage_url,
+                        stream_url=stream_url,
+                        duration=duration,
+                        requester=requester,
+                        source="SoundCloud"
+                    )
+            except Exception as sc_err:
+                logger.warning(f"Fallback SoundCloud para texto falló: {sc_err}")
+
+        raise ValueError(f"No se pudo resolver el stream de audio en YouTube ni alternativas para: '{query}' ({yt_failure_reason or 'Stream no disponible'})")
 
 
 class GuildMusicManager:

@@ -58,7 +58,12 @@ class SongSelectionView(discord.ui.View):
             if chosen_dict.get("stream_url") and not is_webpage_url(chosen_dict.get("stream_url")):
                 song = Song.from_candidate_dict(chosen_dict, self.requester)
             else:
-                song = await Song.from_query(chosen_dict.get("webpage_url") or chosen_dict.get("title"), self.requester)
+                fallback_name = f"{chosen_dict.get('uploader', '')} - {chosen_dict.get('title', '')}".strip(" -") or self.search_query
+                song = await Song.from_query(
+                    chosen_dict.get("webpage_url") or chosen_dict.get("title"),
+                    self.requester,
+                    fallback_title=fallback_name
+                )
 
             await self.manager.add_to_queue(song)
 
@@ -89,7 +94,12 @@ class SongSelectionView(discord.ui.View):
                 if chosen_dict.get("stream_url") and not is_webpage_url(chosen_dict.get("stream_url")):
                     song = Song.from_candidate_dict(chosen_dict, self.requester)
                 else:
-                    song = await Song.from_query(chosen_dict.get("webpage_url") or chosen_dict.get("title"), self.requester)
+                    fallback_name = f"{chosen_dict.get('uploader', '')} - {chosen_dict.get('title', '')}".strip(" -") or self.search_query
+                    song = await Song.from_query(
+                        chosen_dict.get("webpage_url") or chosen_dict.get("title"),
+                        self.requester,
+                        fallback_title=fallback_name
+                    )
 
                 await self.manager.add_to_queue(song)
 

@@ -7,6 +7,8 @@ env/
 # Archivos de configuración con credenciales
 .env
 *.env
+cookies.txt
+*cookies*.txt
 
 # Archivos de caché de Python
 __pycache__/
